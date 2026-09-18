@@ -229,3 +229,15 @@ build\test_http.exe http://127.0.0.1:3080 <token>
 ## 十一、版本基准
 
 本文与协议对着 DeepSeek Harness tag `dsh-v0.1.2-rc.1`（commit `a66e470`）验证。dsh 的会话日志格式带 `SESSION_FORMAT_VERSION`，升级版本后需要重新核对 `docs/DSH-RPC-CONTRACT.md`。
+
+## 十二、许可
+
+MIT License，全文见 [`LICENSE`](LICENSE)。
+
+```
+Copyright (c) 2026 w600518
+```
+
+也就是说可以自由使用、修改、分发，包括闭源商用，只需在副本中保留上面的版权与许可声明。软件按原样提供，不含任何担保。
+
+`third_party/` 下的 DeepSeek Harness 源码属于上游项目，适用其自身许可，不在本许可范围内。
