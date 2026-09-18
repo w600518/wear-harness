@@ -232,12 +232,14 @@ build\test_http.exe http://127.0.0.1:3080 <token>
 
 ## 十二、许可
 
-MIT License，全文见 [`LICENSE`](LICENSE)。
+GNU Affero General Public License v3.0，全文见 [`LICENSE`](LICENSE)。
 
 ```
 Copyright (c) 2026 w600518
 ```
 
-也就是说可以自由使用、修改、分发，包括闭源商用，只需在副本中保留上面的版权与许可声明。软件按原样提供，不含任何担保。
+这是一份强 copyleft 许可：你可以自由使用、修改、分发，但**分发、或通过网络向他人提供服务时，必须一并提供完整源码**，且修改后的版本仍须沿用 AGPL-3.0。软件按原样提供，不含任何担保。
+
+具体到本项目：把 `dsh-relay-server.exe` 放在服务器上让别人连，就落在这个「通过网络提供服务」的范围内，此时需要让使用者能取得对应源码。这也是 AGPL 与 GPL 的唯一实质差别——GPL 管不到网络服务，AGPL 管得到。
 
 `third_party/` 下的 DeepSeek Harness 源码属于上游项目，适用其自身许可，不在本许可范围内。
