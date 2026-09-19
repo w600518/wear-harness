@@ -282,9 +282,14 @@ class _MainPagerState extends State<MainPager> {
      * screen is trivially at its own end, and requiring otherwise made the
      * jump-to-newest control appear over it — offering to scroll somewhere the
      * reader already was.
+     *
+     * Measured against the end of the scrollable area, with only a rounding
+     * slack. The looser test — the end of the content, which sits a composer's
+     * height above it — called the list arrived while a band of empty
+     * background was still below, so the control disappeared with somewhere
+     * left to go.
      */
-    final atBottom =
-        position.pixels >= position.maxScrollExtent - WearTokens.composerHeight;
+    final atBottom = position.pixels >= position.maxScrollExtent - 1;
     if (atBottom == _homeAtBottom) {
       return;
     }
@@ -292,11 +297,13 @@ class _MainPagerState extends State<MainPager> {
     _refreshJumpControl();
   }
 
-  /// Scrolls the transcript to its newest message, with a little air beneath it.
+  /// Scrolls the transcript to the very end of the list.
   ///
-  /// The target is the end of the content, not the end of the scrollable area:
-  /// the list reserves [WearTokens.composerHeight] below its last row, and
-  /// jumping to the raw maxScrollExtent parks the newest message above a gap.
+  /// To the end of the scrollable area, not to the end of the content. The list
+  /// reserves [WearTokens.composerHeight] below its last row for the composer,
+  /// and stopping at that row's end left a band of empty background below the
+  /// newest message — pressing "back to the newest" landed short of the bottom,
+  /// which reads as the button not working.
   void _jumpToNewest() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
@@ -307,9 +314,8 @@ class _MainPagerState extends State<MainPager> {
         return;
       }
       final position = positions.first;
-      final target = (position.maxScrollExtent - WearTokens.composerHeight + 10)
-          .clamp(position.minScrollExtent, position.maxScrollExtent);
-      _homeScroll.jumpTo(target);
+      _homeScroll.jumpTo(position.maxScrollExtent);
+      _refreshJumpControl();
     });
   }
 

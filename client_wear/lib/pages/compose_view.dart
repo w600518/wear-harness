@@ -671,10 +671,12 @@ class _ComposeViewState extends State<ComposeView>
         return;
       }
       final position = controller.position;
-      final target = (position.maxScrollExtent - _composerHeight + 10).clamp(
-        position.minScrollExtent,
-        position.maxScrollExtent,
-      );
+      /*
+       * The end of the scrollable area, not of the content: the list reserves
+       * [_composerHeight] below its last row, and stopping there left the
+       * newest message sitting above a band of empty background.
+       */
+      final target = position.maxScrollExtent;
       if ((controller.offset - target).abs() >= 1) {
         controller.jumpTo(target);
       }

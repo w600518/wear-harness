@@ -52,9 +52,25 @@ tar -tf build\app\outputs\flutter-apk\app-release.apk | Select-String 'lib/'
 
 其中 `fixture copy` 用例核对副本与仓库根文件是否仍逐字节一致。两者由生成器维护，不应手工编辑。
 
+## 表冠
+
+表冠驱动当前页面的滚动，并在滚动时轻震。Flutter 在 Wear OS 上没有转动的输入接口，所以这条链路走 platform channel：`MainActivity` 读原生事件，`RotaryScroll` 在 Dart 侧决定滚到哪里、何时震动。
+
+三处平台差异在实现里都做了处理，没有一处是可选的：
+
+- **事件层级**：在 `dispatchGenericMotionEvent` 拦截。Flutter 的 activity 把 motion 事件交给自己的 view，view 会消费滚轮事件，`onGenericMotionEvent` 那一层从未被调用过。
+- **轴的名称**：这块手表把表冠报成 `SOURCE_MOUSE`（`0x2002`）而不是 AOSP 的 `SOURCE_ROTARY_ENCODER`，转动量落在 `AXIS_VSCROLL` 上，`AXIS_SCROLL` 恒为 0。代码因此不判断 source，只在三个滚动轴里取第一个非零值。
+- **震动的接口**：使用欧加私有的 `android.os.linearmotorvibrator.LinearmotorVibrator` 与 `WaveformEffect`（type 302 / strength 2），与厂方的表冠反馈是同一个效果。该类不在公开 SDK 中，故经反射调用；反射失败或服务缺失时回退到 `VibrationEffect.createOneShot(30ms, 80)`。
+
+行为上：列表确实移动了才震，两次之间至少间隔 40 ms；到达顶端或底端时不震（留 0.5 像素的舍入余量，并把累积清零，避免回转时补发）；页面没有可滚内容时不震。判据是「滚动是否真的发生」，由 Dart 侧给出，因为只有它知道列表在哪里。
+
+开关在客户端设置页，键为 `watch.crownVibrate`，默认开启，改动即时下发原生。
+
 ## 连接设置
 
-地址、端口、口令与设备名（`relay.host`、`relay.port`、`relay.passphrase`、`relay.deviceName`）持久化于 `SharedPreferences`，应用重启后无需重新填写。四个字段初始为空，未填写完整时连接保持拒绝。
+地址、端口、口令与设备名（`relay.host`、`relay.port`、`relay.passphrase`、`relay.deviceName`）持久化于 `SharedPreferences`，应用重启后无需重新填写。四个字段初始为空，未填写完整时连接保持拒绝。表冠震动开关（`watch.crownVibrate`）同样持久化，默认开启。
+
+`VIBRATE` 权限在清单中声明。缺了它震动会被静默丢弃，在手腕上表现得像表冠坏了。
 
 ## 代码结构
 
@@ -64,8 +80,10 @@ tar -tf build\app\outputs\flutter-apk\app-release.apk | Select-String 'lib/'
 | `lib/relay/relay_client.dart` | 连接、握手、帧收发、请求-应答、订阅 |
 | `lib/relay/session_store.dart` | 把 dsh 事件折叠成可渲染的对话行 |
 | `lib/state/relay_session.dart` | 应用级状态：连接生命周期、自动重连、动作 |
+| `lib/state/rotary_scroll.dart` | 表冠的滚动与震动：页面认领、按实际位移请求震动 |
 | `lib/pages/` | 会话列表、对话、连接设置 |
 | `lib/wear_m3/` | 手写的 Wear M3 组件（ScalingLazyColumn、卡片、芯片、圆形进度、TimeText、PositionIndicator） |
+| `android/app/src/main/kotlin/.../MainActivity.kt` | 读表冠事件、把滚动量交给 Dart、调用震动 |
 
 ### 对话渲染
 

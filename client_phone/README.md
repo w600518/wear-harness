@@ -16,8 +16,9 @@
 | 构建目标 | `android-arm`，armeabi-v7a，约 15.0 MB | `android-arm64`，arm64-v8a，约 16.8 MB |
 | `ScalingLazyColumn.scalingEnabled` | 默认 `true`，条目随屏幕缩放 | 默认 `false`，条目不缩放 |
 | `PositionIndicator` | 沿表圈绘制弧形拇指 | 提供 `straight` 参数并默认 `true`，绘制竖直滚动条 |
+| 表冠 | `MainActivity` 读表冠事件并驱动滚动与震动 | 不读取表冠；`rotary_scroll.dart` 共享，但没有事件源 |
 
-除 `package:client_wear/` 与 `package:client_phone/` 的导入前缀外，Dart 源码内容一致。
+除 `package:client_wear/` 与 `package:client_phone/` 的导入前缀外，Dart 源码内容一致。`MainActivity.kt` 是两端的第二个例外：手表版在其中接入表冠（读事件、震动），方屏版仍是默认的空实现，`VIBRATE` 权限也只声明在手表版清单中。
 
 ## 环境
 
