@@ -20,6 +20,17 @@ class PositionIndicator extends StatefulWidget {
     this.color,
     this.sideMargin = WearTokens.indicatorSideMargin,
     this.thickness = WearTokens.indicatorThickness,
+    /*
+     * Straight by default on this build.
+     *
+     * The arc follows the bezel because a vertical bar on a circular panel only
+     * touches the edge at its middle and floats inside it everywhere else — a
+     * straight bar there reads as content, not as chrome. A rectangular screen
+     * has no such problem, and the curved path is also the more expensive of the
+     * two: it is rebuilt from a line segment every two logical pixels on each
+     * paint. The watch build keeps the arc; this one draws one line.
+     */
+    this.straight = true,
   });
 
   final ScrollController controller;
@@ -30,6 +41,9 @@ class PositionIndicator extends StatefulWidget {
   final Color? color;
   final double sideMargin;
   final double thickness;
+
+  /// Draws the bar straight down the right side instead of along the bezel arc.
+  final bool straight;
 
   @override
   State<PositionIndicator> createState() => _PositionIndicatorState();
@@ -132,6 +146,7 @@ class _PositionIndicatorState extends State<PositionIndicator> {
                 ),
                 thickness: widget.thickness,
                 sideMargin: widget.sideMargin,
+                straight: widget.straight,
                 /*
                  * Panel geometry, not this widget's box. The indicator lives
                  * in the scaffold's overlay layer, which is stretched to the
@@ -215,6 +230,7 @@ class _PositionIndicatorPainter extends CustomPainter {
     required this.sideMargin,
     required this.screenSize,
     required this.origin,
+    required this.straight,
   });
 
   final double thumbFraction;
@@ -230,6 +246,9 @@ class _PositionIndicatorPainter extends CustomPainter {
 
   /// Where this painter's box starts inside the panel.
   final Offset origin;
+
+  /// Draws a straight bar rather than an arc along the bezel.
+  final bool straight;
 
   /// Right-hand edge of the bezel at a given height in *this* box's space.
   ///
@@ -271,27 +290,50 @@ class _PositionIndicatorPainter extends CustomPainter {
     final travel = trackHeight - thumbHeight;
     final thumbTop = trackTop + (travel * offsetFraction);
 
+    final trackPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap.round
+      ..color = trackColor
+      ..isAntiAlias = true;
+    final thumbPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap.round
+      ..color = thumbColor.withValues(
+        alpha: WearTokens.indicatorActiveOpacity,
+      )
+      ..isAntiAlias = true;
+
+    if (straight) {
+      /*
+       * One vertical line each for the track and the thumb, inset from the
+       * right edge. No path is built and the panel's centre and radius are not
+       * consulted: on a rectangular screen the edge is where the box ends.
+       */
+      final x = size.width - sideMargin - (thickness / 2);
+      canvas.drawLine(
+        Offset(x, trackTop),
+        Offset(x, trackTop + trackHeight),
+        trackPaint,
+      );
+      canvas.drawLine(
+        Offset(x, thumbTop),
+        Offset(x, thumbTop + thumbHeight),
+        thumbPaint,
+      );
+      return;
+    }
+
     /* Track: the same arc over the same span, barely visible. */
     canvas.drawPath(
       _arcBetween(size, trackTop, trackTop + trackHeight),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = thickness
-        ..strokeCap = StrokeCap.round
-        ..color = trackColor
-        ..isAntiAlias = true,
+      trackPaint,
     );
 
     canvas.drawPath(
       _arcBetween(size, thumbTop, thumbTop + thumbHeight),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = thickness
-        ..strokeCap = StrokeCap.round
-        ..color = thumbColor.withValues(
-          alpha: WearTokens.indicatorActiveOpacity,
-        )
-        ..isAntiAlias = true,
+      thumbPaint,
     );
   }
 
@@ -320,5 +362,6 @@ class _PositionIndicatorPainter extends CustomPainter {
       oldDelegate.thickness != thickness ||
       oldDelegate.sideMargin != sideMargin ||
       oldDelegate.screenSize != screenSize ||
-      oldDelegate.origin != origin;
+      oldDelegate.origin != origin ||
+      oldDelegate.straight != straight;
 }
