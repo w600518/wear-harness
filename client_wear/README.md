@@ -27,9 +27,9 @@ Set-Location "C:\Users\wxd72\Desktop\Wear harness\client_wear"
 & "F:\flutter_windows_3.44.9-stable\flutter\bin\flutter.bat" build apk --target-platform android-arm --release
 ```
 
-产物为 `build\app\outputs\flutter-apk\app-release.apk`，15032468 字节。
+产物为 `build\app\outputs\flutter-apk\app-release.apk`，约 15.0 MB。
 
-**`--target-platform android-arm` 不可省略。** `android/app/build.gradle.kts` 中的 `minSdk = 26` 与 `abiFilters += "armeabi-v7a"` 只描述最低系统版本与目标 ABI，不足以约束打包结果：省略该参数时 Flutter 会为三个 ABI 各打入一份完整原生库，产物达 49873314 字节。带上它则只含 armeabi-v7a 一份。
+**`--target-platform android-arm` 不可省略。** `android/app/build.gradle.kts` 中的 `minSdk = 26` 与 `abiFilters += "armeabi-v7a"` 只描述最低系统版本与目标 ABI，不足以约束打包结果：省略该参数时 Flutter 会为三个 ABI 各打入一份完整原生库，产物达约 49.9 MB。带上它则只含 armeabi-v7a 一份。
 
 ```powershell
 # 核对：完整原生库应只出现在 lib/armeabi-v7a/ 下

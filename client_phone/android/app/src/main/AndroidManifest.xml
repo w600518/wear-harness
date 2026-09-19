@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="Wear Harness"
+        android:label="方屏版"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <!-- Optional: a watch that has the wearable library still loads it, a

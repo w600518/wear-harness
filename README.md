@@ -1,6 +1,6 @@
-# DSH Relay — 把 DeepSeek Harness 会话加密转发到 Wear OS 与 Android
+# DSH Relay — 把 DeepSeek Harness 会话加密转发到 Wear OS 与方屏设备
 
-本仓库把运行在本机的 DeepSeek Harness（下称 dsh）会话，经一条由使用方自持密钥的隧道转发到 Wear OS 手表与 Android 手机。发送端驻留在 dsh 所在的机器，服务端承担公网入口，客户端提供与 dsh Web UI 同源的会话视图与操作。全部流量为 AES-256-CBC 加密、HMAC-SHA256 认证，密钥由使用方设定。
+本仓库把运行在本机的 DeepSeek Harness（下称 dsh）会话，经一条由使用方自持密钥的隧道转发到 Wear OS 手表与方形屏幕设备（手机、平板）。发送端驻留在 dsh 所在的机器，服务端承担公网入口，客户端提供与 dsh Web UI 同源的会话视图与操作。全部流量为 AES-256-CBC 加密、HMAC-SHA256 认证，密钥由使用方设定。
 
 ```
 ┌──────────────────────────────────┐
@@ -14,9 +14,9 @@
    │ dsh-relay-server.exe (C) │   发送端端口 + 客户端端口
    └───────┬──────────────────┘
            │  同一套加密
-   ┌───────┴──────────────────────┐
-   │ Wear OS 客户端 / Android 客户端 │   Flutter
-   └──────────────────────────────┘
+   ┌───────┴────────────────┐
+   │ 手表版 / 方屏版 客户端    │   Flutter
+   └────────────────────────┘
 ```
 
 三端实现同一份协议，规范见 [`protocol/PROTOCOL.md`](protocol/PROTOCOL.md)。
@@ -28,8 +28,8 @@
 | `common/` | 三端共用的 C 库：AES/SHA-256/SHA-1、JSON、帧与握手、TCP/HTTP/WebSocket |
 | `agent/` | 发送端源码 |
 | `server/` | 服务端源码 |
-| `client_wear/` | Flutter Wear OS 客户端，32 位 armeabi-v7a |
-| `client_phone/` | Flutter Android 客户端，64 位 arm64-v8a |
+| `client_wear/` | 手表版客户端，32 位 armeabi-v7a |
+| `client_phone/` | 方屏版客户端（手机与平板），64 位 arm64-v8a |
 | `protocol/` | 协议规范与测试向量生成器 |
 | `scripts/` | 构建脚本 |
 | `tests/` | C 一致性测试与 Node 端到端测试 |
@@ -132,7 +132,7 @@ dsh web --no-open
 | 端口 | 默认 | 连接方 |
 | --- | --- | --- |
 | 发送端端口 | 7777 | 运行 `dsh-relay-sender.exe` 的机器 |
-| 客户端端口 | 7778 | 手表与手机客户端 |
+| 客户端端口 | 7778 | 手表版与方屏版客户端 |
 
 连接抵达哪个端口，就决定它是什么角色。发送端端口上声称自己是客户端的连接（或反之）会在派生任何密钥之前被直接拒绝：
 
@@ -166,46 +166,7 @@ build\dsh-relay-sender.exe --console --passphrase 'your-long-secret'
 
 服务端最多接受 64 个并发对端，并为每个发送端保留其最近一次的会话列表与运行状态，使中途加入的客户端无需等待重发即可获得完整视图。多客户端并发使用尚未支持。
 
-## 七、验证
-
-以下测试均扮演**客户端**，因此连接客户端端口（7778）：
-
-```powershell
-# 会话列表、设备发现、请求往返（独立实现，用于交叉验证协议）
-node tests\relay_client.mjs 127.0.0.1 7778 'your-long-secret'
-
-# 订阅真实会话：snapshot -> 历史记录 -> 按 cursor 翻页
-node tests\relay_follow.mjs 127.0.0.1 7778 'your-long-secret'
-node tests\relay_follow.mjs 127.0.0.1 7778 'your-long-secret' session-xxxxxxxx-...
-
-# 角色隔离：四种组合各试一次，两种必须被拒
-node tests\relay_role_isolation.mjs 127.0.0.1 7777 7778 'your-long-secret'
-
-# 参数整形契约：每个映射方法都必须到达 dsh，而不是被参数校验挡回
-node tests\relay_methods.mjs 127.0.0.1 7778 'your-long-secret'
-```
-
-这些脚本用 Node 的 crypto 独立实现同一套协议，通过即说明线缆格式确实可互操作，而非仅 C 端自洽。
-
-诊断 dsh 连接：
-
-```powershell
-build\test_http.exe http://127.0.0.1:3080 <token>
-```
-
-## 八、客户端与 Web UI 的对齐
-
-客户端的接口依据不是 dsh 的公开文档，而是从 dsh 源码（tag `dsh-v0.1.2-rc.1`）逐行提取的规格：`docs/DSH-WEBUI-SPEC.md` 与 `docs/DSH-RPC-CONTRACT.md` 记录了 Web UI 实际装配的 40 个客户端插件行、51 个会话事件类型、52 个 slot、72 个 RPC 端点与 WebSocket 流协议。
-
-发送端调用 dsh 的**原生 RPC**（`POST /api/<namespace>/<method>` 与 `/api/remote.mux`），即浏览器 GUI 使用的同一条通道，不自造旁路，因此客户端所取数据与 Web UI 同源。
-
-客户端使用下列精简词汇，参数整形由发送端承担（例如 `session/page` 所需的 `address` 对象、`session/prompt` 所需的 `requestId` 与 `content` 数组均在发送端补齐）：
-
-`sessions/list`、`session/page`、`session/prompt`、`session/cancel`、`session/rename`、`session/fork`、`session/selectModel`、`session/modelCatalog`、`session/subscribe`、`session/unsubscribe`、`commands/list`、`commands/execute`、`goals/*`、`settings/describe`、`skills/list`、`relay/status`。
-
-未列出的方法按逃生舱处理：客户端传什么方法名，发送端即将其作为 dsh 端点调用，`payload` 原样作为 `args`。dsh 新增端点无需改动发送端。
-
-## 九、安全
+## 七、安全
 
 - **角色由端口决定**：发送端端口只接受发送端，客户端端口只接受客户端。`HELLO` 中的 `role` 与端口不符时，服务端在派生任何密钥之前关闭连接。
 - **加密**：AES-256-CBC，每帧独立随机 IV，PKCS#7 填充。
@@ -220,23 +181,11 @@ build\test_http.exe http://127.0.0.1:3080 <token>
 
 密钥由口令经 PBKDF2-HMAC-SHA256（50000 次迭代、连接随机盐）派生，盐与 nonce 公开，口令是唯一的保密输入，因此口令强度直接决定抵御离线暴力破解的能力。请使用长口令。
 
-## 十、排查
-
-| 现象 | 原因与处理 |
-| --- | --- |
-| 发送端报 `dsh authentication failed` | token 过期，或 `--dsh-url` 与 token 来源不是同一 dsh 实例（更换端口后须一并修改） |
-| 客户端显示 `relay/dsh-unavailable` | 发送端已连上服务端，但未认证到本机 dsh；检查 token |
-| 客户端显示 `relay/no-sender` | 无发送端在线，或 `device` 名称有误 |
-| 订阅后长时间没有 snapshot | 长会话需先解压与投影，属正常；超过 30 秒仍无则查看发送端日志 |
-| 服务端拒绝连接 | 三端口令不一致，发送端与服务端在握手阶段即拒绝，而非等到数据帧 |
-
-`--verbose` 打开 debug 日志，打印每条 mux 帧与 relay 消息。
-
-## 十一、版本基准
+## 八、版本基准
 
 本文与协议对着 DeepSeek Harness tag `dsh-v0.1.2-rc.1`（commit `a66e470`）验证。dsh 的会话日志格式带 `SESSION_FORMAT_VERSION`，升级版本后需重新核对 `docs/DSH-RPC-CONTRACT.md`。
 
-## 十二、许可
+## 九、许可
 
 GNU Affero General Public License v3.0，全文见 [`LICENSE`](LICENSE)。
 

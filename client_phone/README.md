@@ -1,6 +1,6 @@
-# client_phone — DSH Relay 的 Android 客户端
+# client_phone — DSH Relay 的方屏版客户端
 
-在 Android 手机与平板上完成与 `client_wear` 相同的操作：浏览远端 dsh 的会话列表、阅读对话、发送输入、中断回合、切换模型与查看后台任务。全部流量经 relay 的 AES-256-CBC + HMAC-SHA256 隧道，协议规范见 [`../protocol/PROTOCOL.md`](../protocol/PROTOCOL.md)。
+方屏版运行于 Android 手机与平板等方形屏幕设备，完成与 `client_wear`（手表版）相同的操作：浏览远端 dsh 的会话列表、阅读对话、发送输入、中断回合、切换模型与查看后台任务。全部流量经 relay 的 AES-256-CBC + HMAC-SHA256 隧道，协议规范见 [`../protocol/PROTOCOL.md`](../protocol/PROTOCOL.md)。
 
 构建目标为 64 位 arm64-v8a。
 
@@ -11,9 +11,9 @@
 | 项 | `client_wear` | `client_phone` |
 | --- | --- | --- |
 | 应用 ID | `com.dsh.client_wear` | `com.dsh.client_phone` |
-| 应用名 | `client_wear` | `Wear Harness` |
+| 应用名 | `client_wear` | `方屏版` |
 | `android.hardware.type.watch` | 声明，仅限手表安装 | 不声明，手机与手表均可安装 |
-| 构建目标 | `android-arm`，armeabi-v7a，15032468 字节 | `android-arm64`，arm64-v8a，17653864 字节 |
+| 构建目标 | `android-arm`，armeabi-v7a，约 15.0 MB | `android-arm64`，arm64-v8a，约 16.8 MB |
 | `ScalingLazyColumn.scalingEnabled` | 默认 `true`，条目随屏幕缩放 | 默认 `false`，条目不缩放 |
 | `PositionIndicator` | 沿表圈绘制弧形拇指 | 提供 `straight` 参数并默认 `true`，绘制竖直滚动条 |
 
@@ -42,7 +42,7 @@ Set-Location "C:\Users\wxd72\Desktop\Wear harness\client_phone"
 & "F:\flutter_windows_3.44.9-stable\flutter\bin\flutter.bat" build apk --target-platform android-arm64 --release
 ```
 
-产物为 `build\app\outputs\flutter-apk\app-release.apk`，17653864 字节。
+产物为 `build\app\outputs\flutter-apk\app-release.apk`，约 16.8 MB。
 
 `--target-platform android-arm64` 决定 APK 携带的原生库。`android/app/build.gradle.kts` 中的 `abiFilters += "armeabi-v7a"` 沿用自 `client_wear` 副本，指向 32 位，因此目标 ABI 必须由构建命令显式给出。
 
