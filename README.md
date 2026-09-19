@@ -35,7 +35,7 @@
 | `scripts/` | 构建脚本 |
 | `tests/` | C 一致性测试与 Node 端到端测试 |
 | `docs/` | dsh Web UI 功能规格、dsh RPC 契约分析 |
-| `third_party/deepseek-harness/` | dsh 源码（tag `dsh-v0.1.2-rc.1`），只读参考 |
+| `third_party/deepseek-harness/` | dsh 源码（tag `dsh-v0.1.2-rc.1`），只读参考；**未随仓库分发**，需要时自行放置，缺失不影响构建 |
 
 ## 一、准备工具链
 
@@ -73,7 +73,7 @@ powershell -File scripts\build.ps1
 
 两个中继程序都是 Windows 图形程序（GUI 子系统）：**双击打开窗口**，加 `--console` 则按原来的控制台方式运行，供脚本与集成测试使用。它们共用同一份核心代码，界面只是第二个前端，不是第二套实现。
 
-脚本会顺带跑加密一致性测试；**105 项断言必须全绿**，否则说明加密层与参考实现不一致，不要继续。
+脚本会顺带跑加密一致性测试；**111 项断言必须全绿**，否则说明加密层与参考实现不一致，不要继续。
 
 ## 三、配置文件 config.json
 
@@ -112,18 +112,20 @@ powershell -File scripts\build.ps1
 
 用 `--config PATH` 可以指向别的文件。
 
-## 四、拿到 dsh 的 token
+## 四、dsh 认证
 
-发送端要代表本机 dsh 说话，必须持有 `dsh web` 启动时打印的那个 token。它填在发送端窗口的 **dsh token** 一栏（或 `config.json` 的 `dsh_token`）。
+发送端要代表本机 dsh 说话，必须通过 dsh web 的浏览器认证。**默认自动完成，无需任何手工步骤**：`dsh_token` 留空时，发送端读取本机 dsh 的凭据文件（`%USERPROFILE%\.dsh\.credentials.yaml` 里的 browser-session 签名密钥），在本地铸造一枚与浏览器完全同源的会话 cookie。cookie 的签名与时效校验由 dsh 服务端完成，铸造算法在 `tests/vectors.json` 里与 Node 交叉验证（`dsh web session cookies` 一节）。
+
+`dsh web` 启动时打印的 token 仍然有效——它是另一种（一次性、只存在于 dsh 进程内存里的）凭据。想要显式指定时，把它填进发送端窗口的 **dsh token** 栏（或 `config.json` 的 `dsh_token`）：
 
 ```powershell
 dsh web --no-open
 # 输出：dsh web: http://127.0.0.1:3080/?token=a2K8Q1jXV0QFhS64GfF2Fwu2Jo9GrK56upx0dlKCeXQ
-#                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 #                                              填这一串
 ```
 
-token 每次启动 dsh 都会变。只取 `token=` 之后的部分。不填也能连上中继，但看得到会话为空——发送端会明确报 dsh 不可达。
+token 每次启动 dsh 都会变，因此自动模式更省事。两者都不可用时，发送端会明确报错并说明缺哪一种。dsh 装在非默认位置时，用 `--dsh-home PATH`（或 `config.json` 的 `dsh_home`）指向它的状态目录。
 
 ## 五、两个端口
 
@@ -150,7 +152,7 @@ token 每次启动 dsh 都会变。只取 `token=` 之后的部分。不填也�
 
 **服务端**（放在能被手表访问到的那台机器上）：双击 `dsh-relay-server.exe`，填发送端端口、客户端端口与共享口令，点**启动服务**。窗口会显示两个端口各自的监听状态、在线发送端列表与实时日志。
 
-**发送端**（与 dsh 同一台机器）：双击 `dsh-relay-sender.exe`，填中继地址、**发送端端口**、共享口令、dsh 地址与 token，点**连接中继**。
+**发送端**（与 dsh 同一台机器）：双击 `dsh-relay-sender.exe`，填中继地址、**发送端端口**、共享口令、dsh 地址，点**连接中继**。dsh token 留空即可，发送端会自己取得 dsh 认证（见第四节）。
 
 **客户端**：见 [`client_wear/README.md`](client_wear/README.md)，它连的是**客户端端口**（默认 7778）。
 
@@ -211,6 +213,7 @@ build\test_http.exe http://127.0.0.1:3080 <token>
 - **认证**：握手携带 `HMAC(passphrase, "dsh-relay/v1" || nonce)` 作为持有口令的证明，口令本身从不上线；比较为常量时间。
 - **密钥派生**：PBKDF2-HMAC-SHA256，50000 次迭代，盐由服务端每次连接随机生成，并与双方 nonce 混合。同一个口令不会产生重复的会话密钥。
 - **暴露面**：发送端不监听任何端口，只主动出站；服务端只接受它已连接的发送端集合中存在的 `device`，不信任客户端指定的设备名。
+- **dsh 认证**：发送端不掌握 dsh 的启动 token，而是读取本机 `~/.dsh/.credentials.yaml` 里的签名密钥，在本地铸造会话 cookie。该文件只有当前用户可读，而能读到它的进程本来就能冒充你调用本机 dsh——它不构成新的暴露面。铸出的 cookie 绑定请求的 Host 并带签发时间窗，离开本机即失效。
 
 口令强度直接决定隧道强度——发送端会用 50000 次 PBKDF2，但弱口令仍可被离线暴力破解。用长口令。
 

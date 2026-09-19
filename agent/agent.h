@@ -45,7 +45,8 @@ typedef struct {
  */
 void agent_set_config(const char *server_host, int server_port,
                       const char *passphrase, const char *dsh_url,
-                      const char *dsh_token, const char *device_name);
+                      const char *dsh_token, const char *device_name,
+                      const char *dsh_home);
 
 /*
  * Initializes the connection state and authenticates to the local dsh. Does not

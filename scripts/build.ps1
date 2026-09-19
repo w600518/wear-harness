@@ -99,6 +99,7 @@ Invoke-Build -Name 'dsh-relay-server.exe' `
 Invoke-Build -Name 'dsh-relay-sender.exe' `
     -Sources ($core + @(
         (Join-Path $root 'common\net\dsh_http.c')
+        (Join-Path $root 'common\net\dsh_webauth.c')
         (Join-Path $root 'common\net\dsh_ws.c')
         (Join-Path $root 'agent\main.c')
         (Join-Path $root 'agent\ui.c')
@@ -123,8 +124,10 @@ Invoke-TestBuild -Name 'test_crypto.exe' -Sources @(
     (Join-Path $root 'tests\test_crypto.c')
     (Join-Path $root 'common\crypto\dsh_aes.c')
     (Join-Path $root 'common\crypto\dsh_sha256.c')
+    (Join-Path $root 'common\crypto\dsh_sha1.c')
     (Join-Path $root 'common\json\dsh_json.c')
     (Join-Path $root 'common\wire\dsh_wire.c')
+    (Join-Path $root 'common\net\dsh_webauth.c')
 ) -Libraries @('-lbcrypt')
 
 Invoke-TestBuild -Name 'test_http.exe' -Sources @(

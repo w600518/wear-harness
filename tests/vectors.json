@@ -95,38 +95,38 @@
   "cbcVectors": [
     {
       "note": "empty plaintext still produces one padding block",
-      "keyHex": "076e0d38577ce173de623b4ef16e74c0e0a358c96832f46f7ddbe1d9cb529f94",
-      "ivHex": "b4b486270c067d030d7baae3a6366c8b",
+      "keyHex": "f50c6f4169ac2ac478647caea79bbd937ba8b79c3c8b282d29484c3092bf2a3b",
+      "ivHex": "591580a23a06dfe8ed1669d3eb34e8c8",
       "plainHex": "",
-      "cipherHex": "e6f601964c202c25c9648d37c58aac53"
+      "cipherHex": "ca7fe9b18df9d84e0fce83c5aa2292be"
     },
     {
       "note": "fifteen bytes of padding",
-      "keyHex": "a1d7b0ae68c1c8521360a72378eda6e3d7f232b16f3925c3e75f1e044e7cfc66",
-      "ivHex": "d3bfc0d1e303214cd30e49f5654f9ee2",
+      "keyHex": "e4441f0be2a30fa0322711d48400a5ccfd61faa6f1aaff9a321185052fcde460",
+      "ivHex": "df282434a8a10f3935c85bfea9474377",
       "plainHex": "00",
-      "cipherHex": "64a42d96ed7512368f0a288e6b3257bb"
+      "cipherHex": "d57b575eb34c2fe9876b785a96710e91"
     },
     {
       "note": "exactly one block",
-      "keyHex": "3aa51b32d9978088181155e7e5cf55902c994ff132610270372f56aaa68a875d",
-      "ivHex": "870728346b2fc0dc4f0c7a5b0a91b95d",
+      "keyHex": "45a9d52057c0c64ced9d5ed3a8c19162c37ee5fd15636243163e815b3c42aca1",
+      "ivHex": "f5ac97a25958ea768f709cecb402498d",
       "plainHex": "00112233445566778899aabbccddeeff",
-      "cipherHex": "a69a91c9725ee1e240cb2950a517d4fa5b3a69ef1dd8b43a117a2c9af7a83388"
+      "cipherHex": "9f5bd1c9eac0dcca6d5c83cb111fb943927fbafb8ec1dcd853d6f1f01f1f6a9f"
     },
     {
       "note": "ascii A repeated",
-      "keyHex": "bf5ffd909c4962083ec71efb3c18b4d4cf4ad045e9e043af94dbc4b1065c4324",
-      "ivHex": "94fee30bfa365f95405b91a5b527ace9",
+      "keyHex": "003bd609ad0ad725e9ec64330ec0edd606401e077c01bc463daaca8ff84fd8d6",
+      "ivHex": "e6be59022a0fb3485a7b75df7c0fc79b",
       "plainHex": "41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141",
-      "cipherHex": "909ec76c659747b6deafdaa7452aeed69c602615a49883e40b0826f934af9a3354237427a477201a5abf2db1d86e5a7a44b5af8f32e0259f9f0e0fbc20d2751318f64f070edd34e88b4b7b8f59134128"
+      "cipherHex": "02c5d67069a0402db570aab94c91ed32dc374d4297e2d7048c8f522816b21cf20b4dd711b9c40075617f85aec6f48eb7e7f608c641f895290716ce9802fe45fdd53722e1767ed5993aface4bcc6b0930"
     },
     {
       "note": "unaligned length",
-      "keyHex": "a2a03663e054913e8386e66eb9682f0c4b803d14ae2f4db0467a9b29cc250182",
-      "ivHex": "f75f7df72bb8d09429e4aaf61e21ad67",
-      "plainHex": "6b625bb262e4b811bb507d54e5113340ada1b7b0b0c5e81496c346622ef661f409fc8f62b18af41216deec5f68062166d232f6b255c354daf457bb73db457fab8cdb6915e70414d50844fd53558b8d2c3ea0bccf25b4f3b355e145dcc0484d67418d662c30dc860de35b99241eb5e3c9d4b9e71f405bbe83d6c992cda35aebb7612405139814b7400f85f8021b50a430a3ad5942dc5128367eab6297036ddbe5a86d937e3c2eaf0f3eea46c3a775ae329f375411c156e8e5f23785e0594895e718749d480719a3b11614a337dd32e2400cc89efe48f740b4a17b630ad663523a4db1f7214995845726df85cf74b1dd150d656dbc996eb905689a766363de40ed48",
-      "cipherHex": "8fde5de811dd85f56edb9745515a1bf71aacc244cdcca26605acf294cc11e96f36794a4e91b606535121a870ff4b7b246b36350f19e2156edeab4ad5c37e87ee3aa7a95f47ec8b1c356636f39aba0ef66ee765a8923f2c8e2f8c278daccc5189a7a993617b6945e7448ccee81ba1a4787c3fd253f4133d502730f8ab5a332850eef759a20c3a3922606ec77302f8bf0269be1372bda5318f27cd7a8b50f91de546a5f74a611c98e367aaec99f50c29c49da06c15dc5db4a00d158850b9bb4deb75cdb950337f027add4d2d6cf5a514eacd200cd38035d09603feab1414e4a428d0bc77d0b535a29aa2bcc4a2dd7aa23338c313ba3e1de458c4119129151073d837e376dcf5e33fb1b78eaf9d1bc25749"
+      "keyHex": "547ea3f2ef505b63235f57030e2ff5bc992327232ed3685f14416c4d9cfb5df6",
+      "ivHex": "49ee4b3f45ba29d053e864f299d19c73",
+      "plainHex": "ba0215bd04457d347502948c44b5515a5d6a2bffa75d28a8614e61a5aa3e606219650ce1302fca3c1d7482f60a4ba6e986854d3abcbd0ff0fc5b36f801593260388ddb972c69b38bf05ac4ef43fc3a2b94f5db36b7f04d1e8aeb413f837f2382f62eb470469895202742dd42fe61079a79d21ab58e19e7419a44c8d1745f3207d35c13531f76da7ec9a07874d5b24b5f3ce2bf3fe783f6cf6c3611536325c6ffb7d52682fdd9f2babec648286a421e0093bb0c4895a70f9c6a0b9ec4ffc142026665f39d98181635419f4c8ceb57fe008f0f62d50309d7dba7850141df6f7eb28a5e614069397c4b35e924c48fa571f6361d12f718384d563b038772eb3a1f9adc",
+      "cipherHex": "279a4c115dca62533b9dc713dd9699a2839e816c3362b07766c26ef77e2697e8df25e33f060a8767299f9c65110be3053dd4aa356b8044a3a9852f4003a19ea5e1f6fbb6dadf3efa33ff419763c5af583603de0a6e3d06f064332e972934cf6516f9eb17a7dbbb2e878655cd73bdc52c8a087f621528d8b5d13e83af8c884c302cc506ba9413e6399f24cdf8d8b518c2ec77b06a490dadca55bea050804cc68375229a786c95e5e9211240cedfcff93d6c39ebada41eeaef8e7bfecec5ab9906cb6b5996beb5f2c4ce4efaae409e9997d4cdd59e66f1d6cc8f649ac2e23c932c08b0c95b59414a04a974af35ae11b6f47813933cd4bd4a07d7593076b91660b59dcd9371a7c7c3b969dda269dcd348b9"
     }
   ],
   "frameVector": {
@@ -147,5 +147,23 @@
     "frameHeaderHex": "44534858010300000000000100000050404142434445464748494a4b4c4d4e4f",
     "frameTagHex": "973368664f1138eae8129e1a28023a03d31f730e5c0648220a8f05be11a73b72",
     "frameTotalHex": "44534858010300000000000100000050404142434445464748494a4b4c4d4e4f9aca93a2c40d6c7b7d7ea76821ab3ae4c58a4af71d39108873a80df04beda056c6a250cb9bb38b3eaaffcda8821117bc5c9d3bf93cdf8516765f279c45a67c8ef2f40f7dcc06c698cc8e1da830c8941b973368664f1138eae8129e1a28023a03d31f730e5c0648220a8f05be11a73b72"
-  }
+  },
+  "webauthVectors": [
+    {
+      "note": "loopback authority, timestamps chosen once so the vector is stable",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "authority": "127.0.0.1:3080",
+      "issuedAt": 1760000000000,
+      "expiresAt": 1760003600000,
+      "expect": "dsh-auth-VPhEEcLKeqRDBoBalzN2Nm7CnfxKhLE00pKIDWxt1sw=v1.eyJ2ZXJzaW9uIjoxLCJhdXRob3JpdHkiOiIxMjcuMC4wLjE6MzA4MCIsImlzc3VlZEF0IjoxNzYwMDAwMDAwMDAwLCJleHBpcmVzQXQiOjE3NjAwMDM2MDAwMDB9.rUlr4RIPYQpwaU6JpRAtvdIZXJWAOszcIMoABf-viJY"
+    },
+    {
+      "note": "host with a custom port, one-byte-shorter JSON body",
+      "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "authority": "dsh.lan:7777",
+      "issuedAt": 1735689600000,
+      "expiresAt": 1735693200000,
+      "expect": "dsh-auth-mKtl8OAtcy8-YF5_xOn8aEAQYDsuAr6Fv2dUrDW4sMk=v1.eyJ2ZXJzaW9uIjoxLCJhdXRob3JpdHkiOiJkc2gubGFuOjc3NzciLCJpc3N1ZWRBdCI6MTczNTY4OTYwMDAwMCwiZXhwaXJlc0F0IjoxNzM1NjkzMjAwMDAwfQ.LPXngouKSyA0lxn5wF5mdvnaTXNpp9vXe5YNoNEtvNI"
+    }
+  ]
 }

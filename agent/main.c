@@ -25,6 +25,7 @@
 
 #include "../common/net/dsh_http.h"
 #include "../common/net/dsh_net.h"
+#include "../common/net/dsh_webauth.h"
 #include "../common/net/dsh_ws.h"
 #include "../common/ui/dsh_ui.h"
 #include "../common/util/dsh_cfg.h"
@@ -70,6 +71,7 @@ typedef struct {
     char     passphrase[512];
     char     dsh_base[256];
     char     dsh_token[712];
+    char     dsh_home[512];
     char     device_name[128];
     int      poll_ms;
     int      verbose;
@@ -376,9 +378,31 @@ static int dsh_connect(agent_state *a) {
         }
         DSH_INFO("authenticated with the local dsh webserver");
     } else {
-        DSH_WARN("no dsh_token configured; session mirroring is disabled until one is set");
-        dsh_sb_free(&error);
-        return -1;
+        /*
+         * No token configured: mint a session cookie locally from the signing
+         * secret dsh persists in its credentials file. A `dsh web` launch
+         * token only exists in the dsh process's memory, so this is the only
+         * credential the sender can pick up on its own.
+         */
+        char secret[DSH_WEBAUTH_SECRET_LEN];
+        char cookie[512];
+        char yaml_path[600];
+        long long now = (long long)time(NULL) * 1000;
+
+        snprintf(yaml_path, sizeof(yaml_path), "%.480s\\.credentials.yaml", a->dsh_home);
+        if (dsh_webauth_secret_from_file(yaml_path, secret, sizeof(secret)) == 0 &&
+            dsh_webauth_cookie(secret, a->http.authority,
+                               now - 60000, now + 3600000,
+                               cookie, sizeof(cookie)) == 0) {
+            snprintf(a->http.cookie, sizeof(a->http.cookie), "%s", cookie);
+            a->http.logged_in = 1;
+            DSH_INFO("minted a dsh session cookie from %s", yaml_path);
+        } else {
+            DSH_WARN("no dsh_token configured and %s has no usable signing secret; "
+                     "run `dsh web` once to create it, or fill dsh_token", yaml_path);
+            dsh_sb_free(&error);
+            return -1;
+        }
     }
 
     /* One cheap call proves the token and the endpoint shape both work. */
@@ -1539,7 +1563,9 @@ static void print_usage(const char *argv0) {
     printf("  --port N             relay port (default 7777)\n");
     printf("  --passphrase VALUE   shared secret\n");
     printf("  --dsh-url URL        local dsh web base URL (default http://127.0.0.1:3080)\n");
-    printf("  --dsh-token VALUE    token from the URL printed by `dsh web`\n");
+    printf("  --dsh-token VALUE    token from the URL printed by `dsh web`; empty\n"
+           "                       mints one from the dsh credentials file\n");
+    printf("  --dsh-home PATH      dsh state directory (default %%USERPROFILE%%\\.dsh)\n");
     printf("  --name VALUE         device name shown to clients\n");
     printf("  --console            run without the window, as a console program\n");
     printf("  --verbose            log at debug level\n");
@@ -1587,9 +1613,25 @@ static BOOL WINAPI console_handler(DWORD signal) {
 
 /* ── lifecycle ───────────────────────────────────────────────────────────── */
 
+/* Where the local dsh keeps its state; the credentials file lives inside. */
+static const char *default_dsh_home(void) {
+    static char home[512];
+    const char *base = getenv("USERPROFILE");
+    if (base == NULL) {
+        base = getenv("HOME");
+    }
+    if (base != NULL && base[0] != '\0') {
+        snprintf(home, sizeof(home), "%s\\.dsh", base);
+    } else {
+        snprintf(home, sizeof(home), ".dsh");
+    }
+    return home;
+}
+
 void agent_set_config(const char *server_host, int server_port,
                       const char *passphrase, const char *dsh_url,
-                      const char *dsh_token, const char *device_name) {
+                      const char *dsh_token, const char *device_name,
+                      const char *dsh_home) {
     if (g_agent == NULL) {
         g_agent = (agent_state *)calloc(1, sizeof(agent_state));
         if (g_agent == NULL) {
@@ -1613,6 +1655,8 @@ void agent_set_config(const char *server_host, int server_port,
              dsh_url != NULL && dsh_url[0] != '\0' ? dsh_url : "http://127.0.0.1:3080");
     snprintf(g_agent->dsh_token, sizeof(g_agent->dsh_token), "%s",
              dsh_token != NULL ? dsh_token : "");
+    snprintf(g_agent->dsh_home, sizeof(g_agent->dsh_home), "%s",
+             dsh_home != NULL && dsh_home[0] != '\0' ? dsh_home : default_dsh_home());
     if (device_name != NULL && device_name[0] != '\0') {
         snprintf(g_agent->device_name, sizeof(g_agent->device_name), "%s", device_name);
     } else if (g_agent->device_name[0] == '\0') {
@@ -1838,6 +1882,7 @@ int main(int argc, char **argv) {
     const char *opt_passphrase = NULL;
     const char *opt_dsh_url = NULL;
     const char *opt_dsh_token = NULL;
+    const char *opt_dsh_home = NULL;
     const char *opt_name = NULL;
     int opt_port = -1;
     int opt_verbose = 0;
@@ -1860,6 +1905,8 @@ int main(int argc, char **argv) {
             opt_dsh_url = argv[++i];
         } else if (strcmp(argv[i], "--dsh-token") == 0 && i + 1 < argc) {
             opt_dsh_token = argv[++i];
+        } else if (strcmp(argv[i], "--dsh-home") == 0 && i + 1 < argc) {
+            opt_dsh_home = argv[++i];
         } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
             opt_name = argv[++i];
         } else if (strcmp(argv[i], "--console") == 0) {
@@ -1901,7 +1948,9 @@ int main(int argc, char **argv) {
                         "  --port N             中继端口（默认 7777）\n"
                         "  --passphrase VALUE   共享口令，需与服务端、客户端一致\n"
                         "  --dsh-url URL        本地 dsh 地址（默认 http://127.0.0.1:3080）\n"
-                        "  --dsh-token VALUE    dsh web 启动时打印的 token\n"
+                        "  --dsh-token VALUE    dsh web 启动时打印的 token；留空则自动从\n"
+                        "                       dsh 凭据文件铸造会话\n"
+                        "  --dsh-home PATH      dsh 状态目录（默认 %%USERPROFILE%%\\.dsh）\n"
                         "  --name VALUE         对客户端显示的设备名\n"
                         "  --console            以控制台方式运行，不打开窗口\n"
                         "  --verbose            输出调试日志\n\n"
@@ -1930,6 +1979,8 @@ int main(int argc, char **argv) {
         const char *token = opt_dsh_token != NULL ? opt_dsh_token
                                                   : dsh_cfg_str(&cfg, "dsh_token", "");
         const char *configured_name = dsh_cfg_str(&cfg, "device_name", "");
+        const char *home = opt_dsh_home != NULL ? opt_dsh_home
+                                                : dsh_cfg_str(&cfg, "dsh_home", default_dsh_home());
 
         if (opt_name != NULL) {
             snprintf(device, sizeof(device), "%s", opt_name);
@@ -1946,6 +1997,7 @@ int main(int argc, char **argv) {
         if (opt_passphrase != NULL) dsh_cfg_set_str(&cfg, "passphrase", pass);
         if (opt_dsh_url != NULL) dsh_cfg_set_str(&cfg, "dsh_url", url);
         if (opt_dsh_token != NULL) dsh_cfg_set_str(&cfg, "dsh_token", token);
+        if (opt_dsh_home != NULL) dsh_cfg_set_str(&cfg, "dsh_home", home);
         if (opt_name != NULL) dsh_cfg_set_str(&cfg, "device_name", device);
 
         apply_log_level(dsh_cfg_str(&cfg, "log_level", "info"));
@@ -1970,7 +2022,7 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        agent_set_config(host, port, pass, url, token, device);
+        agent_set_config(host, port, pass, url, token, device, home);
     }
 
     if (!console_mode) {

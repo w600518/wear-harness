@@ -15,6 +15,7 @@
 #include "../common/crypto/dsh_aes.h"
 #include "../common/crypto/dsh_sha256.h"
 #include "../common/json/dsh_json.h"
+#include "../common/net/dsh_webauth.h"
 #include "../common/wire/dsh_wire.h"
 
 static int failures = 0;
@@ -525,6 +526,39 @@ int main(int argc, char **argv) {
     check(dsh_passphrase_matches("abc", "ab", 2) == 0, "prefix rejected");
     check(dsh_passphrase_matches("abc", "abcd", 4) == 0, "extension rejected");
     check(dsh_passphrase_matches("", "", 0) == 1, "empty equals empty");
+
+    /* ── dsh web session cookies ─────────────────────────────────────────── */
+    printf("dsh web session cookies\n");
+    {
+        const dsh_json *list = dsh_json_get(root, "webauthVectors");
+        size_t i;
+
+        check(list != NULL && list->u.arr.count > 0, "webauth vectors present");
+        for (i = 0; list != NULL && i < list->u.arr.count; i++) {
+            const dsh_json *item = list->u.arr.items[i];
+            const char *secret = dsh_json_string(dsh_json_get(item, "secret"), "", NULL);
+            const char *authority = dsh_json_string(dsh_json_get(item, "authority"), "", NULL);
+            const char *expect = dsh_json_string(dsh_json_get(item, "expect"), "", NULL);
+            long long issued = dsh_json_integer(dsh_json_get(item, "issuedAt"), 0);
+            long long expires = dsh_json_integer(dsh_json_get(item, "expiresAt"), 0);
+            char got[512];
+
+            check(dsh_webauth_cookie(secret, authority, issued, expires,
+                                     got, sizeof(got)) == 0,
+                  "cookie minting succeeds");
+            if (strcmp(got, expect) != 0) {
+                printf("    authority=%s\n    got=%s\n    exp=%s\n", authority, got, expect);
+            }
+            check(strcmp(got, expect) == 0, "cookie matches node");
+        }
+
+        /* A secret that is not 32 bytes after decoding must be refused. */
+        {
+            char got[512];
+            check(dsh_webauth_cookie("AAAA", "127.0.0.1:3080", 0, 1, got, sizeof(got)) != 0,
+                  "short secret rejected");
+        }
+    }
 
     dsh_json_free(root);
     free(text);

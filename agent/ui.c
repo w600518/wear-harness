@@ -123,7 +123,8 @@ static void connect_sender(void) {
         DSH_WARN("无法写入 %s；设置不会保留", ui.cfg->path);
     }
 
-    agent_set_config(host, port, pass, url, token, device);
+    agent_set_config(host, port, pass, url, token, device,
+                     dsh_cfg_str(ui.cfg, "dsh_home", ""));
 
     if (agent_start() != 0) {
         dsh_ui_error(ui.window, "无法启动", "共享口令未填写。");
@@ -258,7 +259,7 @@ static void create_controls(HWND hwnd) {
     ui.dsh_url = labelled_edit(hwnd, MARGIN, MARGIN + 106, 70, "dsh 地址",
                                MARGIN + 76, 320, ID_DSH_URL);
 
-    dsh_ui_label(hwnd, MARGIN, MARGIN + 140, 70, 22, "dsh token");
+    dsh_ui_label(hwnd, MARGIN, MARGIN + 140, 70, 22, "dsh token（留空自动）");
     ui.dsh_token = dsh_ui_password(hwnd, MARGIN + 76, MARGIN + 136, 320, 26, "");
     ui.show_token = CreateWindowExW(
         0, L"BUTTON", dsh_ui_wide("显示"),
