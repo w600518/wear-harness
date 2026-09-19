@@ -211,7 +211,12 @@ class _MainPagerState extends State<MainPager> {
           WearTokens.space2,
           0,
           WearTokens.space2,
-          WearTokens.composerHeight + WearTokens.space4,
+          /*
+           * The composer clear of the row, less the 10dp that came back off it:
+           * 20 physical pixels on this 2x panel, which puts the pills just
+           * inside the transcript instead of well above it.
+           */
+          WearTokens.composerHeight + WearTokens.space4 - 10,
         ),
         child: WearChipRow(
           alignment: WrapAlignment.center,

@@ -82,6 +82,13 @@ class WearChip extends StatelessWidget {
                   vertical: WearTokens.space1,
                 ),
                 child: Row(
+                  /*
+                   * Centred, not packed left. A chip is at least as wide as the
+                   * 48dp touch target and usually wider than its own label, so
+                   * the default start alignment left the text sitting against
+                   * the left edge of the pill.
+                   */
+                  mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     if (avatar != null) ...<Widget>[
