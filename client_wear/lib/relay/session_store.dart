@@ -658,14 +658,50 @@ class SessionStore {
   ///
   /// Used by an explicit refresh, where the client asks for the list itself
   /// instead of waiting for the sender's next poll to notice a change.
+  /// Replaces the mirrored session state from a `sessions/list` answer.
+  ///
+  /// The sender answers with the same structure it pushes — list, workspace
+  /// registry, archived ids, archived digests — so this applies all of it.
+  /// Reading only `items`, as it did when the endpoint forwarded dsh's raw
+  /// reply, left the archived set untouched: a session archived from another
+  /// client stayed under its workspace heading because nothing had told this
+  /// one it was archived.
   void setSessionsFromRpc(Map<String, dynamic> answer) {
-    final items = answer['items'];
+    final items = answer['items'] ?? answer['sessions'];
     if (items is! List) {
       return;
     }
     _sessions
       ..clear()
       ..addAll(items.whereType<Map<String, dynamic>>());
+
+    final spaces = answer['workspaces'];
+    if (spaces is List) {
+      workspaces = spaces.whereType<Map<String, dynamic>>().toList(
+        growable: false,
+      );
+    }
+
+    final ids = answer['archivedSessionIds'];
+    if (ids is List) {
+      archivedSessionIds
+        ..clear()
+        ..addAll(ids.whereType<String>());
+    }
+
+    final digests = answer['archivedDigests'];
+    if (digests is List) {
+      /* Merged rather than replaced, matching what the pushed list does: the
+       * entries accumulate so a summary survives a reply that omits it. */
+      for (final entry in digests) {
+        if (entry is Map<String, dynamic>) {
+          final id = entry['sessionId'];
+          if (id is String && id.isNotEmpty) {
+            archivedDigests[id] = entry;
+          }
+        }
+      }
+    }
   }
 
   /// Replaces the transcript with an empty one, keeping the session open.

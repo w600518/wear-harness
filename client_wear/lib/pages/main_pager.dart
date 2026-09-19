@@ -112,16 +112,31 @@ class _MainPagerState extends State<MainPager> {
     _refreshJumpControl();
 
     /*
-     * The browser and the config page ask the sender for fresh state as they
-     * come into view, instead of showing whatever the last poll happened to
-     * leave behind. Settling on a page is the moment that data is about to be
-     * read. Guarded by the last landed page so a refresh fires once per arrival
-     * rather than on every scroll frame.
+     * Landing on a page is the moment its data is about to be read, so the
+     * browser and the config page ask the sender for fresh state instead of
+     * showing whatever the last poll happened to leave behind. Guarded by the
+     * last landed page so a refresh fires once per arrival rather than on every
+     * scroll frame.
      */
     if ((page - page.roundToDouble()).abs() < 0.01) {
       final landed = page.round();
       if (landed != _lastLandedPage) {
         _lastLandedPage = landed;
+        if (landed == 0) {
+          /*
+           * The browser is about to be read, so pull the list rather than show
+           * whatever the last push left behind.
+           *
+           * This is what keeps the archived set honest. Archiving lives in the
+           * workspace registry, not the session controller, so a session
+           * archived anywhere other than this watch — the web UI, another
+           * client — leaves no trace here until the list and the
+           * `archivedSessionIds` travelling with it are read again. Without it
+           * the session kept its place under a workspace heading even though it
+           * was archived.
+           */
+          unawaited(widget.session.refreshSessions());
+        }
         if (landed == 0 || landed == 2) {
           unawaited(widget.session.refreshRelayStatus());
         }

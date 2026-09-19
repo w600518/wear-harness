@@ -654,6 +654,49 @@ static void write_trimmed_sessions(const agent_state *a, const dsh_json *items, 
     dsh_sb_puts(out, "]");
 }
 
+/*
+ * Builds the session-list payload the watch receives.
+ *
+ * One builder for both paths, because they have to agree. The push carries the
+ * list plus the workspace registry, the archived ids and the archived digests;
+ * a client that asks for the list explicitly used to get dsh's raw
+ * `{items:[…]}` instead, with none of that — so "re-read everything" returned a
+ * list whose archived sessions could not be told apart from live ones and put
+ * them back under their workspace headings.
+ *
+ * `items` may be NULL, in which case the list comes back empty but the
+ * surrounding state is still reported.
+ */
+static void build_sessions_payload(const agent_state *a, const dsh_json *items, dsh_sb *out) {
+    dsh_sb_puts(out, "{\"device\":");
+    dsh_sb_put_json_string(out, a->device_name, strlen(a->device_name));
+    dsh_sb_puts(out, ",\"sessions\":");
+    if (items != NULL && items->type == DSH_JSON_ARR) {
+        write_trimmed_sessions(a, items, out);
+    } else {
+        dsh_sb_puts(out, "[]");
+    }
+    dsh_sb_puts(out, ",\"archivedDigests\":");
+    if (a->vanished_digests.len > 0) {
+        dsh_sb_puts(out, a->vanished_digests.buf);
+    } else {
+        dsh_sb_puts(out, "[]");
+    }
+    dsh_sb_puts(out, ",\"archivedSessionIds\":");
+    if (a->archived_ids.len > 0) {
+        dsh_sb_puts(out, a->archived_ids.buf);
+    } else {
+        dsh_sb_puts(out, "[]");
+    }
+    dsh_sb_puts(out, ",\"workspaces\":");
+    if (a->workspaces.len > 0) {
+        dsh_sb_puts(out, a->workspaces.buf);
+    } else {
+        dsh_sb_puts(out, "[]");
+    }
+    dsh_sb_puts(out, "}");
+}
+
 static void mirror_session_list(agent_state *a) {
     dsh_sb value;
     dsh_sb error;
@@ -709,43 +752,16 @@ static void mirror_session_list(agent_state *a) {
 
         {
             dsh_sb payload;
+            /* The RPC value is {items:[...]}; the builder takes the array and
+             * adds the surrounding state the watch needs. The cache keeps the
+             * untrimmed bytes so a change the watch never sees still counts as
+             * a change here. */
+            dsh_json *root = dsh_json_parse(value.buf != NULL ? value.buf : "", value.len);
+            const dsh_json *items = (root != NULL) ? dsh_json_get(root, "items") : NULL;
+
             dsh_sb_init(&payload);
-            dsh_sb_puts(&payload, "{\"device\":");
-            dsh_sb_put_json_string(&payload, a->device_name, strlen(a->device_name));
-            dsh_sb_puts(&payload, ",\"sessions\":");
-            {
-                /* The RPC value is {items:[...]}; forward the array itself,
-                 * with each session's projections cut down to what the watch
-                 * reads. The cache keeps the untrimmed bytes so a change the
-                 * watch never sees still counts as a change here. */
-                dsh_json *root = dsh_json_parse(value.buf != NULL ? value.buf : "", value.len);
-                const dsh_json *items = (root != NULL) ? dsh_json_get(root, "items") : NULL;
-                if (items != NULL && items->type == DSH_JSON_ARR) {
-                    write_trimmed_sessions(a, items, &payload);
-                } else {
-                    dsh_sb_puts(&payload, "[]");
-                }
-                dsh_json_free(root);
-            }
-            dsh_sb_puts(&payload, ",\"archivedDigests\":");
-            if (a->vanished_digests.len > 0) {
-                dsh_sb_puts(&payload, a->vanished_digests.buf);
-            } else {
-                dsh_sb_puts(&payload, "[]");
-            }
-            dsh_sb_puts(&payload, ",\"archivedSessionIds\":");
-            if (a->archived_ids.len > 0) {
-                dsh_sb_puts(&payload, a->archived_ids.buf);
-            } else {
-                dsh_sb_puts(&payload, "[]");
-            }
-            dsh_sb_puts(&payload, ",\"workspaces\":");
-            if (a->workspaces.len > 0) {
-                dsh_sb_puts(&payload, a->workspaces.buf);
-            } else {
-                dsh_sb_puts(&payload, "[]");
-            }
-            dsh_sb_puts(&payload, "}");
+            build_sessions_payload(a, items, &payload);
+            dsh_json_free(root);
 
             relay_send(a, DSH_MSG_SESSIONS, NULL, payload.buf, payload.len);
             dsh_sb_free(&payload);
@@ -1235,7 +1251,6 @@ static const struct {
     const char *endpoint;
     const char *wrap;
 } METHOD_MAP[] = {
-    { "sessions/list",       "session/list",        "_request" },
     { "session/create",      "session/create",      "request"  },
     { "session/page",        "session/page",        "request"  },
     { "session/prompt",      "session/prompt",      "request"  },
@@ -1487,6 +1502,54 @@ static void handle_request(agent_state *a, dsh_message *msg) {
         dsh_sb_free(&error);
         dsh_sb_free(&error_code);
         dsh_sb_free(&failures);
+        return;
+    }
+
+    /*
+     * Answered here rather than forwarded, so an explicit re-read returns the
+     * same structure the watch is pushed: the list plus the workspace registry,
+     * the archived ids and the archived digests. Forwarding dsh's raw
+     * `{items:[…]}` gave the client a list with no way to tell an archived
+     * session from a live one, which is what put archived conversations back
+     * under their workspace headings after a refresh.
+     */
+    if (strcmp(method_buf, "sessions/list") == 0) {
+        dsh_sb value;
+        dsh_sb payload;
+        dsh_sb error;
+        dsh_sb error_code;
+        dsh_json *root = NULL;
+        const dsh_json *items = NULL;
+
+        dsh_sb_init(&value);
+        dsh_sb_init(&error);
+        dsh_sb_init(&error_code);
+
+        if (dsh_rpc_call(&a->http, "session/list",
+                         DSH_ARGS_SESSION_LIST, sizeof(DSH_ARGS_SESSION_LIST) - 1,
+                         &value, &error, &error_code) != 0) {
+            reply_error(a, msg->id,
+                        error_code.len > 0 ? error_code.buf : "relay/transport",
+                        error.len > 0 ? error.buf : "session/list failed");
+            dsh_sb_free(&value);
+            dsh_sb_free(&error);
+            dsh_sb_free(&error_code);
+            return;
+        }
+
+        root = dsh_json_parse(value.buf != NULL ? value.buf : "", value.len);
+        items = (root != NULL) ? dsh_json_get(root, "items") : NULL;
+
+        dsh_sb_init(&payload);
+        build_sessions_payload(a, items, &payload);
+        dsh_json_free(root);
+
+        reply_result(a, msg->id, payload.buf, payload.len);
+
+        dsh_sb_free(&payload);
+        dsh_sb_free(&value);
+        dsh_sb_free(&error);
+        dsh_sb_free(&error_code);
         return;
     }
 

@@ -619,7 +619,7 @@ class RelaySession extends ChangeNotifier {
         (session) => session['sessionId'] == sessionId,
       );
       if (!present) {
-        await _reloadSessions();
+        await refreshSessions();
       }
       _refreshUntilVisible(sessionId, attempt: attempt + 1);
     });
@@ -630,7 +630,14 @@ class RelaySession extends ChangeNotifier {
   /// Called after any operation that changes what the browser shows — rename,
   /// archive, fork, create, delete — so the page reflects it at once instead of
   /// waiting for the sender's next poll to notice the difference.
-  Future<void> _reloadSessions() async {
+  ///
+  /// Also called as the browser comes into view, which is what keeps the
+  /// archived set honest: archiving happens in the workspace registry, and a
+  /// session archived from another client (or from the web UI) leaves no trace
+  /// on this watch until the list — and the `archivedSessionIds` that travel
+  /// with it — are read again. Without that the session stayed under its
+  /// workspace heading, and opening it worked, despite being archived.
+  Future<void> refreshSessions() async {
     final client = _client;
     if (client == null) {
       return;
@@ -1329,7 +1336,7 @@ class RelaySession extends ChangeNotifier {
         payload: {'sessionId': sessionId, 'title': title.trim()},
         device: activeDevice,
       );
-      await _reloadSessions();
+      await refreshSessions();
     } on RelayException catch (error) {
       _lastError = '${error.code}: ${error.message}';
       notifyListeners();
@@ -1394,7 +1401,7 @@ class RelaySession extends ChangeNotifier {
        */
       _applyArchivedIds(result);
       _archivedLocally.add(sessionId);
-      await _reloadSessions();
+      await refreshSessions();
       /*
        * Only when the user is reading the session they just archived. Opening
        * an already-archived session on purpose is allowed and leaves them where
@@ -1664,7 +1671,7 @@ class RelaySession extends ChangeNotifier {
         payload: {'workspaceId': id},
         device: activeDevice,
       );
-      await _reloadSessions();
+      await refreshSessions();
     } on RelayException catch (error) {
       _lastError = '${error.code}: ${error.message}';
       notifyListeners();
@@ -1687,7 +1694,7 @@ class RelaySession extends ChangeNotifier {
         payload: {'workspaceId': id, 'title': title.trim()},
         device: activeDevice,
       );
-      await _reloadSessions();
+      await refreshSessions();
     } on RelayException catch (error) {
       _lastError = '${error.code}: ${error.message}';
       notifyListeners();
@@ -1740,7 +1747,7 @@ class RelaySession extends ChangeNotifier {
        * session could be created and opened while never showing up in the
        * browser. The pull is retried until it lands.
        */
-      await _reloadSessions();
+      await refreshSessions();
       _refreshUntilVisible(sessionId);
       await openSession(sessionId);
     } on RelayException catch (error) {
@@ -1769,7 +1776,7 @@ class RelaySession extends ChangeNotifier {
         if (cwd != null && cwd.isNotEmpty) {
           _createdIn[forked] = cwd;
         }
-        await _reloadSessions();
+        await refreshSessions();
         await openSession(forked);
       }
     } on RelayException catch (error) {
