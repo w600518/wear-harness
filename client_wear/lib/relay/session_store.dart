@@ -564,6 +564,99 @@ class SessionStore {
     }
   }
 
+  /// Applies one workspace-feed frame.
+  ///
+  /// The feed sends a complete `baseline` exactly once and then addresses every
+  /// later change by id: `upsert` carries one workspace, `remove` names one,
+  /// `order` gives the sequence, and only `archived` touches the other set. No
+  /// later frame repeats the whole registry.
+  ///
+  /// Reading the archived ids out of every frame, which is what this used to do,
+  /// left the workspace list frozen at whatever the last `sessions/list` had
+  /// said. A workspace registered afterwards arrived as an `upsert` that nothing
+  /// applied, so it stayed invisible until the sender reconnected and the
+  /// baseline was sent again — and a heading with no sessions yet, which is
+  /// exactly what a freshly registered workspace is, had no other way to appear.
+  void _applyWorkspaceFrame(Map<String, dynamic> frame) {
+    final type = frame['type'];
+
+    switch (type) {
+      case 'baseline':
+        /* The whole registry in one frame. It may sit under `value`, which is
+         * how the sender first forwarded it. */
+        final body = frame['value'] is Map<String, dynamic>
+            ? frame['value'] as Map<String, dynamic>
+            : frame;
+        final ids = body['archivedSessionIds'];
+        if (ids is List) {
+          archivedSessionIds
+            ..clear()
+            ..addAll(ids.whereType<String>());
+        }
+        final items = body['items'];
+        if (items is List) {
+          workspaces = items.whereType<Map<String, dynamic>>().toList(
+            growable: false,
+          );
+        }
+      case 'archived':
+        final ids = frame['archivedSessionIds'];
+        if (ids is List) {
+          archivedSessionIds
+            ..clear()
+            ..addAll(ids.whereType<String>());
+        }
+      case 'upsert':
+        final workspace = frame['workspace'];
+        if (workspace is Map<String, dynamic>) {
+          final next = workspaces.toList();
+          final index = next.indexWhere(
+            (row) => row['workspaceId'] == workspace['workspaceId'],
+          );
+          if (index >= 0) {
+            next[index] = workspace;
+          } else {
+            next.add(workspace);
+          }
+          workspaces = next;
+        }
+      case 'remove':
+        final id = frame['workspaceId'];
+        if (id != null) {
+          workspaces = workspaces
+              .where((row) => row['workspaceId'] != id)
+              .toList(growable: false);
+        }
+      case 'order':
+        final ids = frame['workspaceIds'];
+        if (ids is List) {
+          final pending = <String, Map<String, dynamic>>{};
+          for (final row in workspaces) {
+            final id = row['workspaceId'];
+            if (id is String) {
+              pending[id] = row;
+            }
+          }
+          final ordered = <Map<String, dynamic>>[];
+          for (final id in ids.whereType<String>()) {
+            final row = pending.remove(id);
+            if (row != null) {
+              ordered.add(row);
+            }
+          }
+          /* Whatever the frame never named keeps its relative order at the
+           * end; there is no position for it above. */
+          for (final row in workspaces) {
+            final id = row['workspaceId'];
+            if (id is String && pending.remove(id) != null) {
+              ordered.add(row);
+            }
+          }
+          workspaces = ordered;
+        }
+    }
+  }
+
   void _applyEvents(Map<String, dynamic>? payload) {
     if (payload == null) {
       return;
@@ -586,22 +679,14 @@ class SessionStore {
   /// `session/control` carries queue, jobs and projection increments.
   void _applyControl(Map<String, dynamic>? payload) {
     /*
-     * The workspace feed: dsh's authoritative archived-session set, as either a
-     * `baseline` or an `archived` increment. The session list omits archived
-     * sessions entirely, so this stream is the only place the client can learn
-     * which ones they are — and the only way the set survives a restart.
+     * The workspace feed, as either a complete baseline or an addressed change.
+     * The session list omits archived sessions entirely, so this stream is the
+     * only place the client can learn which ones they are — and the only way the
+     * set survives a restart. The same stream carries the registry itself.
      */
     final archived = payload?['archived'];
     if (archived is Map<String, dynamic>) {
-      final value = archived['value'];
-      final ids = value is Map<String, dynamic>
-          ? value['archivedSessionIds']
-          : archived['archivedSessionIds'];
-      if (ids is List) {
-        archivedSessionIds
-          ..clear()
-          ..addAll(ids.whereType<String>());
-      }
+      _applyWorkspaceFrame(archived);
     }
 
     /*

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../state/active_listenable_builder.dart';
 import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
+import 'directory_browser_page.dart';
 
 /// The session browser, and the leftmost card of the home pager.
 ///
@@ -422,7 +423,19 @@ class _SessionViewState extends State<SessionView>
           accounted.add(sessionId);
         }
       }
-      if (group.sessions.isNotEmpty) {
+      /*
+       * A workspace holding nothing is kept — under the workspace scope, which
+       * is the view of the registry itself. Registering one is a deliberate act
+       * and its heading is the only evidence it worked, so hiding it until a
+       * session happened to appear under it read as the registration having
+       * failed. The other scopes are views of sessions rather than of the
+       * registry, and there an empty workspace has nothing to contribute. The
+       * ungrouped bucket follows the same rule in reverse: it exists only to
+       * hold what no workspace claimed.
+       */
+      final registryView = _scope == SessionScope.workspace;
+      if (group.sessions.isNotEmpty ||
+          (registryView && group.path.isNotEmpty)) {
         groups.add(group);
       }
     }
@@ -505,13 +518,13 @@ class _SessionViewState extends State<SessionView>
           children: <Widget>[
             ScalingLazyColumn(
               controller: widget.scrollController,
-              topSpacer: 45,
+              topSpacer: 38,
               /* 50 rather than the 25 the other lists use: this one ends on a
                * row that opens a session, and on a round panel the last row
                * otherwise sits close enough to the bezel that the arc clips it
                * as the list settles. */
               padding: const EdgeInsets.only(bottom: 50),
-              itemCount: headCount + 1 + rows.length,
+              itemCount: headCount + 2 + rows.length,
               itemSpacing: WearTokens.itemSpacing,
               itemBuilder: (context, index, centerDistance) {
                 var cursor = 0;
@@ -525,9 +538,12 @@ class _SessionViewState extends State<SessionView>
                   return _header(session, _visible.length);
                 }
                 if (index == cursor + 1) {
+                  return _addWorkspaceRow();
+                }
+                if (index == cursor + 2) {
                   return _scopeRow();
                 }
-                return rows[index - cursor - 2];
+                return rows[index - cursor - 3];
               },
             ),
           ],
@@ -643,6 +659,42 @@ class _SessionViewState extends State<SessionView>
   }
 
   /// Rename or delete a workspace, as a row of chips.
+  /// The chip sheet every heading action opens, held to one fixed height.
+  ///
+  /// A bottom sheet grows upward from the screen edge, so a sheet sized by its
+  /// content puts its chips lower the less that content needs: the workspace
+  /// menu wraps onto one row against the session menu's two, and the delete
+  /// confirmation is one line above one row again. All of them are held to two
+  /// rows here and pack from the top, so their chips land on the same line
+  /// whichever one was opened.
+  ///
+  /// `message` is the confirmation line, drawn above the chips where a menu
+  /// needs one.
+  Widget _chipSheet({String? message, required List<Widget> chips}) {
+    return SizedBox(
+      height: WearTokens.chipHeight * 2 + WearTokens.space2,
+      child: Column(
+        /* Pinned to the top edge rather than centred: the box is taller than the
+         * shortest sheet needs, and what has to match is where the chips start. */
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: <Widget>[
+          if (message != null) ...<Widget>[
+            Text(
+              message,
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: WearTokens.space2),
+          ],
+          WearChipRow(
+            alignment: WrapAlignment.center,
+            children: chips,
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showWorkspaceMenu(_SessionGroup group) async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -654,9 +706,8 @@ class _SessionViewState extends State<SessionView>
           WearTokens.space2,
           WearTokens.space4,
         ),
-        child: WearChipRow(
-          alignment: WrapAlignment.center,
-          children: <Widget>[
+        child: _chipSheet(
+          chips: <Widget>[
             WearChip(
               label: '重命名',
               icon: Icons.edit_rounded,
@@ -702,29 +753,18 @@ class _SessionViewState extends State<SessionView>
           WearTokens.space2,
           WearTokens.space4,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(
-              '删除工作区「${group.label}」？',
-              style: Theme.of(context).textTheme.bodySmall,
-              textAlign: TextAlign.center,
+        child: _chipSheet(
+          message: '删除工作区「${group.label}」？',
+          chips: <Widget>[
+            WearChip(
+              label: '取消',
+              icon: Icons.close_rounded,
+              onTap: () => Navigator.of(sheetContext).pop(false),
             ),
-            const SizedBox(height: WearTokens.space2),
-            WearChipRow(
-              alignment: WrapAlignment.center,
-              children: <Widget>[
-                WearChip(
-                  label: '取消',
-                  icon: Icons.close_rounded,
-                  onTap: () => Navigator.of(sheetContext).pop(false),
-                ),
-                WearChip(
-                  label: '删除',
-                  icon: Icons.delete_outline_rounded,
-                  onTap: () => Navigator.of(sheetContext).pop(true),
-                ),
-              ],
+            WearChip(
+              label: '删除',
+              icon: Icons.delete_outline_rounded,
+              onTap: () => Navigator.of(sheetContext).pop(true),
             ),
           ],
         ),
@@ -786,7 +826,12 @@ class _SessionViewState extends State<SessionView>
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: WearTokens.space1),
+      /*
+       * No vertical padding: the heading and its line sit directly under the
+       * list's top spacer, so the status the page opens on is the first thing
+       * read rather than one gap further down.
+       */
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -862,6 +907,44 @@ class _SessionViewState extends State<SessionView>
         ),
       ],
     );
+  }
+
+  /// Registering a directory, on a row of its own above the scopes.
+  ///
+  /// It is drawn as a scope chip — same size, same shape — but it is not one,
+  /// and sharing their row read as a fifth scope. Its own row also keeps the
+  /// scope row to the four entries the panel fits across. It stays put in every
+  /// scope, because registering changes what the list holds rather than which
+  /// part of it is shown; hiding it under the other scopes only meant walking
+  /// back to find it.
+  Widget _addWorkspaceRow() {
+    return WearChipRow(
+      alignment: WrapAlignment.center,
+      children: <Widget>[
+        WearChip(
+          label: '添加工作区',
+          icon: Icons.create_new_folder_rounded,
+          onTap: () => unawaited(_browseForWorkspace()),
+        ),
+      ],
+    );
+  }
+
+  /// Walks the host's directories and registers the one that gets picked.
+  ///
+  /// The registration happens inside the browser page, so the list behind it is
+  /// already refreshed by the time that page closes. What is left here is
+  /// opening the heading the user just created: one that arrived collapsed
+  /// would read as if the tap had done nothing.
+  Future<void> _browseForWorkspace() async {
+    final added = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => DirectoryBrowserPage(session: widget.session),
+      ),
+    );
+    if (added != null && mounted) {
+      setState(() => _expandedGroups.add(added));
+    }
   }
 
   Widget _sessionCard(Map<String, dynamic> item) {
@@ -996,9 +1079,8 @@ class _SessionViewState extends State<SessionView>
           WearTokens.space2,
           WearTokens.space4,
         ),
-        child: WearChipRow(
-          alignment: WrapAlignment.center,
-          children: <Widget>[
+        child: _chipSheet(
+          chips: <Widget>[
             WearChip(
               label: '重命名',
               icon: Icons.edit_rounded,

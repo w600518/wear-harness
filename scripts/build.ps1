@@ -69,6 +69,7 @@ $core = @(
     'common\net\dsh_net.c'
     'common\util\dsh_cfg.c'
     'common\util\dsh_log.c'
+    'common\util\dsh_fs.c'
     'common\ui\dsh_ui.c'
 ) | ForEach-Object { Join-Path $root $_ }
 

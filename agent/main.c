@@ -29,6 +29,7 @@
 #include "../common/net/dsh_ws.h"
 #include "../common/ui/dsh_ui.h"
 #include "../common/util/dsh_cfg.h"
+#include "../common/util/dsh_fs.h"
 #include "../common/util/dsh_log.h"
 
 #include "agent.h"
@@ -54,6 +55,13 @@
  * how many consecutive RPC failures mean an established link has gone away. */
 #define DSH_RETRY_MS 5000
 #define DSH_MAX_FAILURES 3
+
+/*
+ * Upper bound on the workspaces one sender mirrors. A registry larger than this
+ * keeps the first ones it saw and stops accepting new ones; the bound exists so
+ * a frame cannot grow the sender's memory without limit.
+ */
+#define DSH_MAX_WORKSPACES 256
 
 typedef struct {
     char      session_id[192];
@@ -142,6 +150,21 @@ typedef struct {
      * has no usable directory at all.
      */
     dsh_sb workspaces;
+
+    /*
+     * The registry behind `workspaces`, one slot per workspace.
+     *
+     * The feed publishes a complete baseline once and then addresses every
+     * change by id — `upsert`, `remove`, `order`, `archived` — and no later
+     * frame repeats the whole set. Keeping only what the baseline carried meant
+     * a workspace registered while the sender was running never appeared: the
+     * upsert frame arrived, had nothing to apply itself to, and the cached list
+     * the client was handed stayed as it was before. Holding one slot per
+     * workspace lets each frame land where it belongs.
+     */
+    char *workspace_json[DSH_MAX_WORKSPACES];
+    char *workspace_ids[DSH_MAX_WORKSPACES];
+    int   workspace_count;
 
     unsigned long long next_list_poll;
     unsigned long long next_ping;
@@ -667,6 +690,216 @@ static void write_trimmed_sessions(const agent_state *a, const dsh_json *items, 
  * `items` may be NULL, in which case the list comes back empty but the
  * surrounding state is still reported.
  */
+/* ── workspace registry ───────────────────────────────────────────────────── */
+
+/*
+ * The feed publishes a complete baseline once and then addresses every later
+ * change by id. These helpers keep one slot per workspace so each frame lands
+ * where it belongs; without them the sender could only ever have repeated the
+ * baseline, which is why a workspace registered while it was running never
+ * reached the client.
+ */
+
+static void workspaces_free(agent_state *a) {
+    int i;
+
+    for (i = 0; i < a->workspace_count; i++) {
+        free(a->workspace_json[i]);
+        free(a->workspace_ids[i]);
+    }
+    a->workspace_count = 0;
+}
+
+/* Publishes the slots as the array every client-facing path reads. */
+static void workspaces_publish(agent_state *a) {
+    int i;
+
+    dsh_sb_reset(&a->workspaces);
+    dsh_sb_putc(&a->workspaces, '[');
+    for (i = 0; i < a->workspace_count; i++) {
+        if (i > 0) {
+            dsh_sb_putc(&a->workspaces, ',');
+        }
+        dsh_sb_puts(&a->workspaces, a->workspace_json[i]);
+    }
+    dsh_sb_putc(&a->workspaces, ']');
+}
+
+static int workspace_find(const agent_state *a, const char *id, size_t id_len) {
+    int i;
+
+    for (i = 0; i < a->workspace_count; i++) {
+        if (strlen(a->workspace_ids[i]) == id_len &&
+            memcmp(a->workspace_ids[i], id, id_len) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Stores one workspace view, replacing its slot or taking a new one. */
+static void workspace_store(agent_state *a, const dsh_json *workspace) {
+    const char *id = dsh_json_string(dsh_json_get(workspace, "workspaceId"), NULL, NULL);
+    dsh_sb text;
+    char  *json;
+    char  *key;
+    size_t id_len;
+    int    index;
+
+    if (id == NULL || id[0] == '\0') {
+        return;
+    }
+    id_len = strlen(id);
+
+    dsh_sb_init(&text);
+    dsh_json_write(workspace, &text);
+    if (text.oom) {
+        dsh_sb_free(&text);
+        return;
+    }
+    json = text.buf;
+
+    key = (char *)malloc(id_len + 1);
+    if (key == NULL) {
+        free(json);
+        return;
+    }
+    memcpy(key, id, id_len + 1);
+
+    index = workspace_find(a, id, id_len);
+    if (index < 0) {
+        if (a->workspace_count >= DSH_MAX_WORKSPACES) {
+            free(json);
+            free(key);
+            return;
+        }
+        /* A fresh slot holds nothing yet, so there is nothing to release. */
+        index = a->workspace_count++;
+    } else {
+        free(a->workspace_json[index]);
+        free(a->workspace_ids[index]);
+    }
+
+    a->workspace_json[index] = json;
+    a->workspace_ids[index] = key;
+}
+
+/*
+ * Reorders the slots to the sequence the feed published.
+ *
+ * The registry's order is the order clients show headings in, so a frame that
+ * carries only ids still has to be honoured. Slots the frame does not name keep
+ * their relative order at the end, which is all that can be said about a
+ * workspace it never mentioned.
+ */
+static void workspaces_reorder(agent_state *a, const dsh_json *ids) {
+    char *json[DSH_MAX_WORKSPACES];
+    char *keys[DSH_MAX_WORKSPACES];
+    int   used[DSH_MAX_WORKSPACES];
+    int   next = 0;
+    int   i;
+    size_t k;
+
+    for (i = 0; i < a->workspace_count; i++) {
+        used[i] = 0;
+    }
+
+    for (k = 0; k < ids->u.arr.count && next < DSH_MAX_WORKSPACES; k++) {
+        const char *id = dsh_json_string(ids->u.arr.items[k], NULL, NULL);
+        int         index;
+
+        if (id == NULL || id[0] == '\0') {
+            continue;
+        }
+        index = workspace_find(a, id, strlen(id));
+        if (index < 0 || used[index]) {
+            continue;
+        }
+        json[next] = a->workspace_json[index];
+        keys[next] = a->workspace_ids[index];
+        used[index] = 1;
+        next++;
+    }
+    for (i = 0; i < a->workspace_count; i++) {
+        if (!used[i] && next < DSH_MAX_WORKSPACES) {
+            json[next] = a->workspace_json[i];
+            keys[next] = a->workspace_ids[i];
+            next++;
+        }
+    }
+    for (i = 0; i < next; i++) {
+        a->workspace_json[i] = json[i];
+        a->workspace_ids[i] = keys[i];
+    }
+    workspaces_publish(a);
+}
+
+/* Applies one workspace-feed frame, whichever kind it is. */
+static void workspaces_apply(agent_state *a, const dsh_json *value) {
+    const char     *type = dsh_json_string(dsh_json_get(value, "type"), "", NULL);
+    const dsh_json *inner = dsh_json_get(value, "value");
+
+    if (strcmp(type, "baseline") == 0) {
+        const dsh_json *items = dsh_json_get(inner != NULL ? inner : value, "items");
+        size_t          i;
+
+        workspaces_free(a);
+        if (items != NULL && items->type == DSH_JSON_ARR) {
+            for (i = 0; i < items->u.arr.count; i++) {
+                if (items->u.arr.items[i] != NULL &&
+                    items->u.arr.items[i]->type == DSH_JSON_OBJ) {
+                    workspace_store(a, items->u.arr.items[i]);
+                }
+            }
+        }
+        workspaces_publish(a);
+        return;
+    }
+
+    if (strcmp(type, "upsert") == 0) {
+        const dsh_json *workspace = dsh_json_get(value, "workspace");
+
+        if (workspace != NULL && workspace->type == DSH_JSON_OBJ) {
+            workspace_store(a, workspace);
+            workspaces_publish(a);
+        }
+        return;
+    }
+
+    if (strcmp(type, "remove") == 0) {
+        const char *id = dsh_json_string(dsh_json_get(value, "workspaceId"), NULL, NULL);
+
+        if (id != NULL) {
+            int index = workspace_find(a, id, strlen(id));
+
+            if (index >= 0) {
+                int k;
+
+                free(a->workspace_json[index]);
+                free(a->workspace_ids[index]);
+                for (k = index; k + 1 < a->workspace_count; k++) {
+                    a->workspace_json[k] = a->workspace_json[k + 1];
+                    a->workspace_ids[k] = a->workspace_ids[k + 1];
+                }
+                a->workspace_count--;
+                workspaces_publish(a);
+            }
+        }
+        return;
+    }
+
+    if (strcmp(type, "order") == 0) {
+        const dsh_json *ids = dsh_json_get(value, "workspaceIds");
+
+        if (ids != NULL && ids->type == DSH_JSON_ARR) {
+            workspaces_reorder(a, ids);
+        }
+        return;
+    }
+
+    /* `archived` carries no registry change, and neither does anything new. */
+}
+
 static void build_sessions_payload(const agent_state *a, const dsh_json *items, dsh_sb *out) {
     dsh_sb_puts(out, "{\"device\":");
     dsh_sb_put_json_string(out, a->device_name, strlen(a->device_name));
@@ -1161,26 +1394,24 @@ static void handle_mux_message(agent_state *a, const char *json, size_t len) {
                 } else if (strlen(a->workspace_stream_id) == stream_len &&
                     memcmp(a->workspace_stream_id, stream_id, stream_len) == 0) {
                     /*
-                     * Baseline carries the whole set; later frames carry it
-                     * again after a change. Forwarding the value verbatim keeps
-                     * the client's copy identical to dsh's.
+                     * The registry, reassembled from whichever frame arrived —
+                     * baseline, upsert, remove or order. The frame is also
+                     * forwarded verbatim, so a client that follows the feed
+                     * itself sees each change at once instead of waiting for the
+                     * next list refresh.
                      */
                     dsh_sb payload;
                     const dsh_json *inner = dsh_json_get(value, "value");
                     const dsh_json *ids = dsh_json_get(value, "archivedSessionIds");
-                    const dsh_json *items = dsh_json_get(inner, "items");
 
-                    if (ids == NULL) {
+                    if (ids == NULL && inner != NULL) {
                         ids = dsh_json_get(inner, "archivedSessionIds");
                     }
                     if (ids != NULL) {
                         dsh_sb_reset(&a->archived_ids);
                         dsh_json_write(ids, &a->archived_ids);
                     }
-                    if (items != NULL && items->type == DSH_JSON_ARR) {
-                        dsh_sb_reset(&a->workspaces);
-                        dsh_json_write(items, &a->workspaces);
-                    }
+                    workspaces_apply(a, value);
 
                     dsh_sb_init(&payload);
                     dsh_sb_puts(&payload, "{\"device\":");
@@ -1393,6 +1624,60 @@ static void handle_request(agent_state *a, dsh_message *msg) {
                       followed);
         reply_result(a, msg->id, value.buf, value.len);
         dsh_sb_free(&value);
+        return;
+    }
+
+    /*
+     * Host directory browsing, answered here rather than by dsh.
+     *
+     * dsh ships a directory picker, but on Windows its `auto` backend resolves
+     * to `native` whenever the web server is bound to loopback, and that
+     * backend drives an OS dialog on the host display: the browse verbs a
+     * remote client needs answer `directory-picker/unavailable`. The sender is
+     * on the same machine and can read the filesystem directly, so the watch's
+     * workspace picker asks it instead.
+     *
+     * `relay/browse` lists one level; an absent or empty path lists the user's
+     * home directory, which is where a watch that has never picked anything
+     * should start. `relay/mkdir` creates one child directory under an existing
+     * parent, for a workspace whose directory does not exist yet.
+     */
+    if (strcmp(method_buf, "relay/browse") == 0) {
+        const char *path = dsh_json_string(dsh_json_get(payload, "path"), NULL, NULL);
+        char       *json = NULL;
+        char       *error = NULL;
+
+        if (dsh_fs_browse(path, &json, &error) != 0) {
+            reply_error(a, msg->id, "relay/browse-failed",
+                        error != NULL ? error : "cannot read that directory");
+            free(error);
+            return;
+        }
+        reply_result(a, msg->id, json, strlen(json));
+        free(json);
+        return;
+    }
+
+    if (strcmp(method_buf, "relay/mkdir") == 0) {
+        const char *path = dsh_json_string(dsh_json_get(payload, "path"), NULL, NULL);
+        const char *name = dsh_json_string(dsh_json_get(payload, "name"), NULL, NULL);
+        char       *created = NULL;
+        char       *error = NULL;
+        dsh_sb      value;
+
+        if (dsh_fs_mkdir(path, name, &created, &error) != 0) {
+            reply_error(a, msg->id, "relay/mkdir-failed",
+                        error != NULL ? error : "cannot create that directory");
+            free(error);
+            return;
+        }
+        dsh_sb_init(&value);
+        dsh_sb_puts(&value, "{\"path\":");
+        dsh_sb_put_json_string(&value, created, strlen(created));
+        dsh_sb_putc(&value, '}');
+        reply_result(a, msg->id, value.buf, value.len);
+        dsh_sb_free(&value);
+        free(created);
         return;
     }
 

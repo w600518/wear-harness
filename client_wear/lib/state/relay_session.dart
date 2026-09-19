@@ -1748,6 +1748,98 @@ class RelaySession extends ChangeNotifier {
     }
   }
 
+  /// Registers a directory as a workspace, then refreshes the list.
+  ///
+  /// Registration is what `workspace/create` already does — it is how the
+  /// browser resolves a directory to an id — so adding one is that call with
+  /// nothing after it. dsh answers with the existing registration when the
+  /// directory is already known, so doing this twice is harmless rather than a
+  /// duplicate.
+  ///
+  /// Returns whether the registration went through, so a caller that closes a
+  /// page on success does not have to read a possibly stale [lastError].
+  Future<bool> addWorkspace(String path) async {
+    final client = _client;
+    final trimmed = path.trim();
+    if (client == null || trimmed.isEmpty) {
+      return false;
+    }
+    _lastError = null;
+    try {
+      final id = await _workspaceIdFor(trimmed);
+      if (id == null) {
+        return false;
+      }
+      await refreshSessions();
+      notifyListeners();
+      return true;
+    } on RelayException catch (error) {
+      _lastError = '${error.code}: ${error.message}';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Lists one directory level on the sender's host, for the workspace picker.
+  ///
+  /// This goes to the sender, not to dsh. dsh ships a browse-capable picker,
+  /// but on Windows its `auto` backend resolves to `native` whenever the web
+  /// server is bound to loopback, and `native` drives a dialog on the host
+  /// display — asking it for a listing answers `directory-picker/unavailable`.
+  /// The sender is on that same machine and reads the filesystem itself.
+  ///
+  /// An absent path lists the user's home directory, which is where a watch
+  /// that has never picked anything should start. The answer carries `path`
+  /// (the resolved level), `home`, `parent` (null at a filesystem root) and
+  /// `entries`; every entry is a directory that can be entered, each with
+  /// `name`, `path` and `hidden`.
+  Future<Map<String, dynamic>?> listDirectory([String? path]) async {
+    final client = _client;
+    if (client == null) {
+      return null;
+    }
+    try {
+      return await client.request(
+        'relay/browse',
+        payload: <String, dynamic>{
+          if (path != null && path.isNotEmpty) 'path': path,
+        },
+        device: activeDevice,
+      );
+    } on RelayException catch (error) {
+      _lastError = '${error.code}: ${error.message}';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Creates one child directory under an existing parent on the sender's host.
+  ///
+  /// Answers the created directory's absolute path, or null when the sender
+  /// refused: a name that is not a single path segment, a name already taken,
+  /// or a parent that cannot be written. [lastError] carries which of those it
+  /// was.
+  Future<String?> createDirectory(String path, String name) async {
+    final client = _client;
+    final trimmed = name.trim();
+    if (client == null || path.isEmpty || trimmed.isEmpty) {
+      return null;
+    }
+    try {
+      final created = await client.request(
+        'relay/mkdir',
+        payload: <String, dynamic>{'path': path, 'name': trimmed},
+        device: activeDevice,
+      );
+      final directory = created['path'];
+      return directory is String && directory.isNotEmpty ? directory : null;
+    } on RelayException catch (error) {
+      _lastError = '${error.code}: ${error.message}';
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// Starts a new session in a working directory and opens it.
   ///
   /// `cwd` is what ties the session to a workspace: dsh derives the workspace
