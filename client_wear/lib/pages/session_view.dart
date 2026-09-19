@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../state/relay_session.dart';
@@ -448,8 +450,20 @@ class _SessionViewState extends State<SessionView>
     return groups;
   }
 
-  Future<void> _open(String sessionId) async {
-    await widget.session.openSession(sessionId);
+  /// Opens a session and moves to the conversation on the same frame.
+  ///
+  /// This used to await [RelaySession.openSession] before advancing the pager,
+  /// which kept the browser on screen for as long as the subscribe and the
+  /// model catalog took: on a session that has to be fetched, that is a visible
+  /// stall with nothing moving and no hint that the tap registered.
+  ///
+  /// The switch now happens immediately and the conversation fills in behind
+  /// it. Nothing is lost by not waiting: the open session and its notification
+  /// are both recorded synchronously, before the first await inside
+  /// openSession, so the composer page paints the right conversation as soon as
+  /// it appears — with whatever loading state it has until the snapshot lands.
+  void _open(String sessionId) {
+    unawaited(widget.session.openSession(sessionId));
     widget.onOpened?.call();
   }
 
