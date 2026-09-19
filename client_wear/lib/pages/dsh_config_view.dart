@@ -698,45 +698,171 @@ class _AgentPresetsPageState extends State<_AgentPresetsPage> {
 }
 
 /// A pushed page listing the models the sender reported.
-class _ModelPicker extends StatelessWidget {
+/// A pushed page listing the catalog's models, grouped the way the session
+/// page groups conversations by workspace.
+///
+/// The catalog is a provider → model tree, so one heading per provider with its
+/// models underneath keeps a long flat list navigable on a round panel: the
+/// heading states how many models are behind it before a scroll is spent on
+/// them.
+class _ModelPicker extends StatefulWidget {
   const _ModelPicker({required this.session, required this.catalog});
 
   final RelaySession session;
   final Map<String, dynamic> catalog;
 
   @override
+  State<_ModelPicker> createState() => _ModelPickerState();
+}
+
+/// One provider and the models it offers, as the picker groups them.
+class _ProviderGroup {
+  const _ProviderGroup({
+    required this.id,
+    required this.label,
+    required this.models,
+  });
+
+  final String id;
+  final String label;
+  final List<Map<String, dynamic>> models;
+}
+
+class _ModelPickerState extends State<_ModelPicker> {
+  /// Providers whose models are on screen. Collapsed to start, as the session
+  /// page's workspaces are.
+  final Set<String> _expanded = <String>{};
+
+  void _toggle(String provider) {
+    setState(() {
+      if (!_expanded.remove(provider)) {
+        _expanded.add(provider);
+      }
+    });
+  }
+
+  /// The catalog as provider groups, in the host's own order.
+  List<_ProviderGroup> _providerGroups() {
+    final groups = <_ProviderGroup>[];
+    final raw = widget.catalog['groups'];
+    if (raw is! List) {
+      return groups;
+    }
+    for (final group in raw) {
+      if (group is! Map<String, dynamic>) {
+        continue;
+      }
+      final models = group['models'];
+      if (models is! List) {
+        continue;
+      }
+      final listed = models.whereType<Map<String, dynamic>>().toList();
+      if (listed.isEmpty) {
+        continue;
+      }
+      final id = '${group['id'] ?? ''}';
+      final name = group['name'];
+      groups.add(
+        _ProviderGroup(
+          id: id,
+          label: name is String && name.isNotEmpty ? name : id,
+          models: listed,
+        ),
+      );
+    }
+    return groups;
+  }
+
+  /// One provider heading, shaped like the session page's workspace row.
+  Widget _providerHeader(_ProviderGroup group) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final open = _expanded.contains(group.id);
+
+    return WearCard(
+      padding: const EdgeInsets.symmetric(
+        horizontal: WearTokens.space3,
+        vertical: WearTokens.space1,
+      ),
+      onTap: () => _toggle(group.id),
+      semanticLabel:
+          '${group.label}，${group.models.length} 个模型，'
+          '${open ? '已展开，点按收起' : '点按展开'}',
+      child: Row(
+        children: <Widget>[
+          Icon(Icons.dns_rounded, size: 16, color: colors.primary),
+          const SizedBox(width: WearTokens.space2),
+          Expanded(
+            child: Text(
+              group.label,
+              style: text.labelLarge,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text('${group.models.length}', style: text.labelSmall),
+          const SizedBox(width: WearTokens.space1),
+          Icon(
+            open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+            size: 20,
+            color: colors.primary,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// One model, sitting under its provider's heading.
+  Widget _modelCard(
+    Map<String, dynamic> model,
+    String provider,
+    String? currentId,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    final selected = model['id'] == currentId;
+    final description = model['description'];
+    final name = '${model['name'] ?? model['id']}';
+
+    return WearCard(
+      padding: const EdgeInsets.symmetric(
+        horizontal: WearTokens.space3,
+        vertical: WearTokens.space2,
+      ),
+      leading: Icon(
+        selected
+            ? Icons.radio_button_checked_rounded
+            : Icons.radio_button_unchecked_rounded,
+        color: selected ? colors.primary : colors.onSurfaceVariant,
+      ),
+      title: name,
+      subtitle: description is String && description.isNotEmpty
+          ? description
+          : '$provider / ${model['id']}',
+      onTap: () async {
+        await widget.session.selectModel(provider, '${model['id']}');
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      semanticLabel: '$name${selected ? '，当前' : ''}',
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scroll = ScrollController();
-    final groups = catalog['groups'];
-    final rows = <Map<String, dynamic>>[];
+    final groups = _providerGroups();
+    final current = widget.session.store.modelSelection;
+    final currentId = current == null ? null : '${current['model']}';
 
-    if (groups is List) {
-      for (final group in groups) {
-        if (group is! Map<String, dynamic>) {
-          continue;
-        }
-        final providerId = '${group['id'] ?? ''}';
-        final models = group['models'];
-        if (models is! List) {
-          continue;
-        }
-        for (final model in models) {
-          if (model is Map<String, dynamic>) {
-            rows.add(<String, dynamic>{
-              'provider': providerId,
-              'id': model['id'],
-              'name': model['name'] ?? model['id'],
-              'description': model['description'],
-            });
-          }
+    final rows = <Widget>[];
+    for (final group in groups) {
+      rows.add(_providerHeader(group));
+      if (_expanded.contains(group.id)) {
+        for (final model in group.models) {
+          rows.add(_modelCard(model, group.id, currentId));
         }
       }
-    }
-
-    final current = session.store.modelSelection;
-    String? currentId;
-    if (current != null) {
-      currentId = '${current['model']}';
     }
 
     return WearScaffold(
@@ -759,35 +885,7 @@ class _ModelPicker extends StatelessWidget {
               ),
             );
           }
-          final row = rows[index - 1];
-          final selected = row['id'] == currentId;
-          final description = row['description'];
-
-          return WearCard(
-            padding: const EdgeInsets.symmetric(
-              horizontal: WearTokens.space3,
-              vertical: WearTokens.space2,
-            ),
-            leading: Icon(
-              selected
-                  ? Icons.radio_button_checked_rounded
-                  : Icons.radio_button_unchecked_rounded,
-              color: selected
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            title: '${row['name']}',
-            subtitle: description is String && description.isNotEmpty
-                ? description
-                : '${row['provider']}',
-            onTap: () async {
-              await session.selectModel('${row['provider']}', '${row['id']}');
-              if (context.mounted) {
-                Navigator.of(context).pop();
-              }
-            },
-            semanticLabel: '${row['name']}${selected ? '，当前' : ''}',
-          );
+          return rows[index - 1];
         },
       ),
     );

@@ -180,6 +180,23 @@ class _MainPagerState extends State<MainPager> {
     _refreshJumpControl();
   }
 
+  /// The levels in fixed slots, with a gap where this model dropped Off.
+  ///
+  /// Every model that takes a reasoning setting ends up with the same number
+  /// of slots, so the levels line up whatever subset it offers.
+  static List<Map<String, dynamic>?> _reasoningSlots(
+    List<Map<String, dynamic>> efforts,
+  ) {
+    final slots = efforts
+        .map<Map<String, dynamic>?>((effort) => effort)
+        .toList();
+    if (efforts.isEmpty ||
+        efforts.any((effort) => '${effort['id']}' == 'off')) {
+      return slots;
+    }
+    return <Map<String, dynamic>?>[null, ...slots];
+  }
+
   /// Offers the reasoning efforts the session's model accepts.
   Future<void> _pickReasoning() async {
     final session = widget.session;
@@ -199,14 +216,27 @@ class _MainPagerState extends State<MainPager> {
           WearTokens.space2,
           WearTokens.space4,
         ),
-        child: WearChipRow(
-          alignment: WrapAlignment.center,
+        child: Row(
           children: <Widget>[
-            for (final effort in efforts)
-              WearChip(
-                label: session.reasoningLabel(effort),
-                selected: effort['id'] == current,
-                onTap: () => Navigator.of(sheetContext).pop('${effort['id']}'),
+            /*
+             * Fixed slots rather than a re-centred wrap: a model that drops the
+             * Off level keeps the slot it would have occupied, so the levels it
+             * does have never shift sideways. Re-centring three pills where
+             * four used to sit reads as a different control rather than the
+             * same one missing a level.
+             */
+            for (final effort in _reasoningSlots(efforts))
+              Expanded(
+                child: effort == null
+                    ? const SizedBox.shrink()
+                    : Center(
+                        child: WearChip(
+                          label: session.reasoningLabel(effort),
+                          selected: effort['id'] == current,
+                          onTap: () =>
+                              Navigator.of(sheetContext).pop('${effort['id']}'),
+                        ),
+                      ),
               ),
           ],
         ),
