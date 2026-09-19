@@ -127,6 +127,9 @@ void main() {
       await tester.pumpWidget(host(ScalingLazyColumn(
         controller: controller,
         centerFirstAndLastItem: false,
+        // Stated rather than inherited: the two clients ship different
+        // defaults, and this case is about what scaling does.
+        scalingEnabled: true,
         itemCount: 30,
         itemBuilder: (context, index, centerDistance) =>
             SizedBox(height: 40, child: Text('entry $index')),
@@ -418,7 +421,7 @@ void main() {
 
       await tester.drag(find.byType(PageView), const Offset(-320, 0));
       await tester.pumpAndSettle();
-      expect(atPage(), contains('配置'));
+      expect(atPage(), contains('DSH 设置'));
 
       await tester.drag(find.byType(PageView), const Offset(-320, 0));
       await tester.pumpAndSettle();
