@@ -1078,18 +1078,24 @@ class SessionStore {
   }
 
   /// Creates or updates the in-flight assistant row from the stream buffers.
+  ///
+  /// The row is found and replaced in one reverse walk. Going through
+  /// [_streamingItem] and then [_replace] walked the list twice per chunk in
+  /// opposite directions, and a chunk is the hottest event there is.
   void _syncStreaming(int seq) {
     if (_streamText.isEmpty && _streamReasoning.isEmpty) {
       return;
     }
 
-    final existing = _streamingItem;
-    if (existing != null) {
-      _replace(
-        existing,
-        existing.copyWith(text: _streamText, reasoning: _streamReasoning),
-      );
-      return;
+    for (var i = _items.length - 1; i >= 0; i--) {
+      final item = _items[i];
+      if (item is AssistantMessageItem && item.streaming) {
+        _items[i] = item.copyWith(text: _streamText, reasoning: _streamReasoning);
+        return;
+      }
+      if (item is UserMessageItem) {
+        break;
+      }
     }
 
     _append(

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../relay/relay_client.dart';
@@ -1733,6 +1732,7 @@ class RelaySession extends ChangeNotifier {
     _reconnectTimer?.cancel();
     _snapshotTimer?.cancel();
     _subscribeTimer?.cancel();
+    _notifyThrottle?.cancel();
     _disposed = true;
     unawaited(_teardown());
     super.dispose();
@@ -1741,32 +1741,54 @@ class RelaySession extends ChangeNotifier {
   /// True once the session has been torn down, so pending frame callbacks stop.
   bool _disposed = false;
 
-  /// Whether a coalesced notification is already queued for this frame.
-  bool _notifyScheduled = false;
+  /// The trailing rebuild queued while the stream is being throttled.
+  Timer? _notifyThrottle;
+  DateTime? _notifiedAt;
 
-  /// Coalesces a burst of relay messages into one rebuild per frame.
+  /// Shortest gap between two stream-driven rebuilds.
+  ///
+  /// One rebuild per frame was still too often while a long reply was arriving.
+  /// Each rebuild re-runs the grouping pass, reconstructs every bubble and lets
+  /// the scaling list re-measure, and the row that actually changed is a single
+  /// Text whose content grew by one chunk — on a watch CPU that does not fit in
+  /// a frame, so the whole transcript stuttered. Roughly fifteen rebuilds a
+  /// second is past the point where the eye can tell the text is growing, and
+  /// it leaves the frame budget to the scroll and the animations instead.
+  static const Duration _notifyInterval = Duration(milliseconds: 66);
+
+  /// Coalesces a burst of relay messages into a bounded number of rebuilds.
   ///
   /// A streaming reply arrives as dozens of chunks per second. Notifying per
   /// message rebuilt the whole transcript each time — the grouping pass, every
   /// bubble, and the scaling list's measurement — which is what made the
-  /// conversation stutter while the model was writing. One rebuild per frame is
-  /// all the screen can show anyway.
+  /// conversation stutter while the model was writing.
   ///
-  /// The frame is requested explicitly. Waiting for `addPostFrameCallback`
-  /// alone deadlocks when nothing else has asked for a frame: the callback
-  /// waits on the frame, and the frame waits on this notification, so the
-  /// screen sits on "正在载入会话…" forever.
+  /// The trailing rebuild is held rather than dropped: only one is ever
+  /// pending, so the final chunk of a burst still reaches the screen once the
+  /// interval passes.
   void _notifySoon() {
-    if (_notifyScheduled || _disposed) {
+    if (_disposed) {
       return;
     }
-    _notifyScheduled = true;
-    SchedulerBinding.instance.scheduleFrame();
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      _notifyScheduled = false;
-      if (!_disposed) {
-        notifyListeners();
-      }
-    });
+
+    final last = _notifiedAt;
+    final elapsed = last == null
+        ? _notifyInterval
+        : DateTime.now().difference(last);
+    if (elapsed >= _notifyInterval) {
+      _flushNotify();
+      return;
+    }
+    _notifyThrottle ??= Timer(_notifyInterval - elapsed, _flushNotify);
+  }
+
+  void _flushNotify() {
+    _notifyThrottle?.cancel();
+    _notifyThrottle = null;
+    if (_disposed) {
+      return;
+    }
+    _notifiedAt = DateTime.now();
+    notifyListeners();
   }
 }
