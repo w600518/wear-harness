@@ -162,8 +162,13 @@ token 每次启动 dsh 都会变，因此自动模式更省事。两者都不可
 
 ```powershell
 build\dsh-relay-server.exe --console --port 7777 --client-port 7778 --passphrase 'your-long-secret'
-build\dsh-relay-sender.exe --console --passphrase 'your-long-secret' --dsh-token <token>
+build\dsh-relay-sender.exe --console --passphrase 'your-long-secret'
+# dsh token 留空即自动取得认证；需要显式指定时再加 --dsh-token <token>
 ```
+
+### 多客户端
+
+暂不支持多客户端（懒得写）。服务端本身是按多客户端写的——数据广播给所有在线客户端，请求各自回给发起方——但客户端这一侧没有做多客户端适配。请一次只连一个客户端：两个同时在线时，审批与提问会广播给双方，谁先回答都算数，不会按客户端隔离。
 
 ## 七、验证
 
