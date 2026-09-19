@@ -162,6 +162,21 @@ class SessionStore {
   /// is very much in progress and interruptible.
   bool turnRunning = false;
 
+  /// Whether the running turn was started by the goal driver.
+  ///
+  /// Cancelling one round is a different request from cancelling the goal
+  /// behind it. The driver continues an active goal the moment the agent goes
+  /// idle, so ending a goal-sourced round on its own let the next one begin and
+  /// the stop button came straight back — the turn never appeared to stop.
+  ///
+  /// dsh labels its own queued message with `source.kind === 'goal'`, which is
+  /// the only place that distinction is visible to a client. A turn a person
+  /// started stays false, so stopping it leaves an unrelated goal alone.
+  bool turnGoalDriven = false;
+
+  /// `source.kind` of the most recent `user/message`, live or replayed.
+  String? _lastUserSourceKind;
+
   /// Whether the history replayed by the last snapshot ended on a turn start.
   ///
   /// A window that stops after a start with no end after it is a turn still in
@@ -271,6 +286,8 @@ class SessionStore {
     _lastSeq = 0;
     _foldedChunks.clear();
     turnRunning = false;
+    turnGoalDriven = false;
+    _lastUserSourceKind = null;
     _historyEndsOnOpenTurn = false;
     _streamText = '';
     _streamReasoning = '';
@@ -503,6 +520,7 @@ class SessionStore {
      * is not allowed to raise the flag on its own.
      */
     turnRunning = _historyEndsOnOpenTurn;
+    turnGoalDriven = turnRunning && _lastUserSourceKind == 'goal';
   }
 
   /// Folds an older page of history in ahead of what is already loaded.
@@ -1027,6 +1045,7 @@ class SessionStore {
           _historyEndsOnOpenTurn = true;
         } else {
           turnRunning = true;
+          turnGoalDriven = _lastUserSourceKind == 'goal';
         }
       case 'session/end-seed':
       case 'step/start':
@@ -1044,6 +1063,7 @@ class SessionStore {
 
   /// Chinese label for a non-human `source.kind`.
   static String _sourceLabel(String kind) => switch (kind) {
+    'goal' => '目标',
     'tool' => '工具结果',
     'plugin' => '系统通知',
     'model' => '模型消息',
@@ -1068,6 +1088,7 @@ class SessionStore {
      */
     final source = fields['source'];
     final kind = source is Map<String, dynamic> ? source['kind'] : null;
+    _lastUserSourceKind = kind is String ? kind : null;
     if (kind is String && kind != 'user') {
       _append(StatusItem(seq: seq, label: _sourceLabel(kind), detail: text));
       return;
@@ -1214,6 +1235,21 @@ class SessionStore {
     _streamReasoning = '';
   }
 
+  /// Retires the running-turn flag on the client's own authority.
+  ///
+  /// A cancelled turn is acknowledged by the request coming back, and the flag
+  /// is cleared here rather than waiting for `turn/end`. An event that never
+  /// arrives — the dsh event mux reopens on its own, and anything published
+  /// while it is down is gone — otherwise left the button on screen after the
+  /// work it cancels had already stopped, which is the one state the user
+  /// cannot act on. Any turn that really does still run re-raises the flag with
+  /// its own `turn/start`.
+  void markTurnStopped() {
+    turnRunning = false;
+    turnGoalDriven = false;
+    _closeStreaming();
+  }
+
   void _appendToolCall(int seq, Map<String, dynamic> fields) {
     /*
      * The streaming row is deliberately left open.
@@ -1300,6 +1336,7 @@ class SessionStore {
       _historyEndsOnOpenTurn = false;
     } else {
       turnRunning = false;
+      turnGoalDriven = false;
     }
     _closeStreaming();
     final reason = fields['reason'];

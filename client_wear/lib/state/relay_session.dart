@@ -1419,14 +1419,35 @@ class RelaySession extends ChangeNotifier {
   }
 
   /// Interrupts the running turn.
+  ///
+  /// A goal keeps the agent fed: the round driver continues an active goal the
+  /// moment the agent goes idle, so cancelling a goal-sourced round on its own
+  /// ended one round and began the next, and the stop button was back before
+  /// the user could lift their finger. The driver only continues a goal whose
+  /// phase is still active at that idle point, so pausing first — while the
+  /// round is still in flight — is what actually stops the work. The cancel
+  /// then ends that round.
+  ///
+  /// Only a goal-sourced turn pauses the goal. A turn the user started is their
+  /// own message, and the goal behind it is not what they asked to stop.
+  ///
+  /// The flag is retired from the acknowledgement rather than from `turn/end`:
+  /// the dsh event mux reopens by itself, and an end published while it was down
+  /// never reached the client, leaving the button on screen after the work had
+  /// already stopped.
   Future<void> cancelTurn() async {
     final client = _client;
     final sessionId = store.openSessionId;
     if (client == null || sessionId == null) {
       return;
     }
+    if (store.turnGoalDriven && hasGoal && goalPhase == 'active') {
+      await pauseGoal();
+    }
     try {
       await client.cancel(sessionId, device: activeDevice);
+      store.markTurnStopped();
+      notifyListeners();
     } on RelayException catch (error) {
       _lastError = '${error.code}: ${error.message}';
       notifyListeners();
