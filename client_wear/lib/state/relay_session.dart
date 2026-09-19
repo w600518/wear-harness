@@ -1278,6 +1278,32 @@ class RelaySession extends ChangeNotifier {
   /// The open session's pending queue, as dsh reports it.
   List<Map<String, dynamic>> get queuedItems => store.queuedItems;
 
+  /// Queue rows still waiting for the turn after this one.
+  ///
+  /// dsh keeps both kinds in one queue projection and tells them apart by
+  /// `placement`: a `queued` row sits on the next-turn inbox, while a
+  /// `steering` row has already been accepted into the next-step inbox of the
+  /// turn that is running. The third value, `context`, marks a system
+  /// injection — nobody wrote it and no row action applies to it, so it is
+  /// left out, which is also what the web client's queue dock does. A row
+  /// without the field predates it and is read as queued.
+  List<Map<String, dynamic>> get queuedPending => _queueRows('queued');
+
+  /// Interjections already sent but not yet read by the model.
+  ///
+  /// A row stays here until dsh records the durable `user/message` for it; the
+  /// queue mirror drops the transient row at that same moment. This list is
+  /// therefore the visible half of the handoff, not a second source of truth.
+  List<Map<String, dynamic>> get queuedSteering => _queueRows('steering');
+
+  /// True when the interjection list has any row to show.
+  bool get hasQueuedRows =>
+      queuedPending.isNotEmpty || queuedSteering.isNotEmpty;
+
+  List<Map<String, dynamic>> _queueRows(String placement) => store.queuedItems
+      .where((row) => (row['placement'] as String? ?? 'queued') == placement)
+      .toList(growable: false);
+
   /// Text of one queued item.
   static String queuedText(Map<String, dynamic> item) =>
       SessionStore.queuedText(item);

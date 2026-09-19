@@ -164,7 +164,7 @@ class _MainPagerState extends State<MainPager> {
      * something in the list to look at.
      */
     final listVisible =
-        _onComposer.value && widget.session.queuedItems.isNotEmpty;
+        _onComposer.value && widget.session.hasQueuedRows;
     if (_showInterjections.value != listVisible) {
       _showInterjections.value = listVisible;
     }
@@ -656,9 +656,10 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
     return ListenableBuilder(
       listenable: widget.session,
       builder: (context, _) {
-        final entries = widget.session.queuedItems;
+        final pending = widget.session.queuedPending;
+        final steering = widget.session.queuedSteering;
 
-        if (entries.isEmpty) {
+        if (pending.isEmpty && steering.isEmpty) {
           return WearScaffold(
             child: Center(
               child: Padding(
@@ -676,6 +677,19 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
         }
 
         /*
+         * Two groups in one flat list of rows rather than a header per nested
+         * list: the whole page is a handful of rows on a watch face, and a flat
+         * run keeps one scroll position for the page instead of two that would
+         * fight over the overlay indicator.
+         */
+        final rows = <Widget>[
+          if (pending.isNotEmpty) _groupHeader('排队中'),
+          ...pending.map((entry) => _row(entry, steerable: true)),
+          if (steering.isNotEmpty) _groupHeader('待插话'),
+          ...steering.map((entry) => _row(entry, steerable: false)),
+        ];
+
+        /*
          * A plain ListView, not the scaling column.
          *
          * The scaling column keeps an element per index and rebuilds it only
@@ -689,75 +703,105 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
           child: ListView.builder(
             controller: scroll,
             padding: const EdgeInsets.only(top: 45, bottom: 25),
-            itemCount: entries.length,
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.only(
-                left: WearTokens.space3,
-                right: WearTokens.space3,
-                bottom: WearTokens.itemSpacing,
-              ),
-              child: _row(entries[index]),
-            ),
+            itemCount: rows.length,
+            itemBuilder: (context, index) => rows[index],
           ),
         );
       },
     );
   }
 
-  Widget _row(Map<String, dynamic> entry) {
+  /// A heading over one queue group.
+  ///
+  /// It is an ordinary list row, not a sticky header: the groups are short and
+  /// a heading that scrolls away with its rows still reads as theirs.
+  Widget _groupHeader(String label) {
+    final text = Theme.of(context).textTheme;
+    final colors = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: WearTokens.space3,
+        right: WearTokens.space3,
+        bottom: WearTokens.space1,
+      ),
+      child: Text(
+        label,
+        style: text.labelMedium!.copyWith(color: colors.onSurfaceVariant),
+      ),
+    );
+  }
+
+  Widget _row(Map<String, dynamic> entry, {required bool steerable}) {
     final text = Theme.of(context).textTheme;
     final sending = _sending == '';
 
-    return WearCard(
-      padding: const EdgeInsets.symmetric(
-        horizontal: WearTokens.space3,
-        vertical: WearTokens.space2,
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: WearTokens.space3,
+        right: WearTokens.space3,
+        bottom: WearTokens.itemSpacing,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(RelaySession.queuedText(entry), style: text.bodyMedium),
-          const SizedBox(height: WearTokens.space2),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: <Widget>[
-              WearIconButton(
-                icon: Icons.edit_rounded,
-                size: WearTokens.chipHeight,
-                iconSize: WearTokens.chipIconSize,
-                onPressed: sending ? null : () => _edit(entry),
-                semanticLabel: '编辑排队消息',
-              ),
-              const SizedBox(width: WearTokens.space1),
-              WearIconButton(
-                icon: Icons.delete_outline_rounded,
-                size: WearTokens.chipHeight,
-                iconSize: WearTokens.chipIconSize,
-                onPressed: sending
-                    ? null
-                    : () => widget.session.removeQueuedItem('${entry['id']}'),
-                semanticLabel: '删除排队消息',
-              ),
-              const SizedBox(width: WearTokens.space1),
-              if (sending)
-                const SizedBox(
-                  width: WearTokens.chipHeight,
-                  height: WearTokens.chipHeight,
-                  child: Center(
-                    child: WearCircularProgress(size: 18, strokeWidth: 2),
-                  ),
-                )
-              else
+      child: WearCard(
+        padding: const EdgeInsets.symmetric(
+          horizontal: WearTokens.space3,
+          vertical: WearTokens.space2,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(RelaySession.queuedText(entry), style: text.bodyMedium),
+            const SizedBox(height: WearTokens.space2),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
                 WearIconButton(
-                  icon: Icons.send_rounded,
+                  icon: Icons.edit_rounded,
                   size: WearTokens.chipHeight,
                   iconSize: WearTokens.chipIconSize,
-                  onPressed: () => _sendNow(entry),
-                  semanticLabel: '立刻发送',
+                  onPressed: sending ? null : () => _edit(entry),
+                  semanticLabel: '编辑排队消息',
                 ),
-            ],
-          ),
-        ],
+                const SizedBox(width: WearTokens.space1),
+                WearIconButton(
+                  icon: Icons.delete_outline_rounded,
+                  size: WearTokens.chipHeight,
+                  iconSize: WearTokens.chipIconSize,
+                  onPressed: sending
+                      ? null
+                      : () => widget.session.removeQueuedItem('${entry['id']}'),
+                  semanticLabel: '删除排队消息',
+                ),
+                /*
+                 * An interjection that already went in has nothing left to
+                 * send: the row is on screen because the model has not read it
+                 * yet, and steering it again addresses an item that has left
+                 * the next-turn inbox. Editing and dropping it stay, because
+                 * neither depends on where the message is waiting.
+                 */
+                if (steerable) ...<Widget>[
+                  const SizedBox(width: WearTokens.space1),
+                  if (sending)
+                    const SizedBox(
+                      width: WearTokens.chipHeight,
+                      height: WearTokens.chipHeight,
+                      child: Center(
+                        child: WearCircularProgress(size: 18, strokeWidth: 2),
+                      ),
+                    )
+                  else
+                    WearIconButton(
+                      icon: Icons.send_rounded,
+                      size: WearTokens.chipHeight,
+                      iconSize: WearTokens.chipIconSize,
+                      onPressed: () => _sendNow(entry),
+                      semanticLabel: '立刻发送',
+                    ),
+                ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
