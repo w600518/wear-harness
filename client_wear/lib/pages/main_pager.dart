@@ -197,11 +197,21 @@ class _MainPagerState extends State<MainPager> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => Padding(
+        /*
+         * Cleared above the composer.
+         *
+         * The sheet is anchored to the bottom edge, and the composer owns the
+         * last composerHeight of the page, so the usual space4 inset dropped
+         * the pills straight onto the send row — the button was still visible
+         * through them. Lifting the row by the composer's height puts it over
+         * the transcript instead, which is where the other overlay controls
+         * already sit.
+         */
         padding: const EdgeInsets.fromLTRB(
           WearTokens.space2,
           0,
           WearTokens.space2,
-          WearTokens.space4,
+          WearTokens.composerHeight + WearTokens.space4,
         ),
         child: WearChipRow(
           alignment: WrapAlignment.center,
