@@ -138,6 +138,23 @@ class RelaySession extends ChangeNotifier {
   StreamSubscription<RelayStatusUpdate>? _statusSubscription;
   Timer? _reconnectTimer;
 
+  /// Pings the relay, and notices when a ping goes unanswered.
+  Timer? _pingTimer;
+
+  /// True between sending a ping and seeing its pong come back.
+  bool _awaitingPong = false;
+
+  /// How often the watch pings the relay.
+  ///
+  /// The sender has always kept its own link warm every 25 seconds, but nothing
+  /// kept the watch's: an idle TCP connection is the first thing NAT tables,
+  /// carrier gateways and routers drop, and a connection dropped from the
+  /// middle produces no FIN and no error. The socket stays open as far as the
+  /// app can tell, so it reported "connected" while receiving nothing — which
+  /// is the intermittent disconnect this heartbeat exists to fix. The same
+  /// cadence as the sender keeps the mapping warm on both halves.
+  static const Duration _pingInterval = Duration(seconds: 25);
+
   final store = SessionStore();
 
   RelayStatus _status = RelayStatus.disconnected;
@@ -227,6 +244,16 @@ class RelaySession extends ChangeNotifier {
 
     _messageSubscription = client.messages.listen((message) {
       /*
+       * A pong is the relay proving the link is still there. It is consumed
+       * here rather than forwarded to the store: it is transport bookkeeping,
+       * not something the transcript has any use for.
+       */
+      if (message.kind == 'pong') {
+        _awaitingPong = false;
+        return;
+      }
+
+      /*
        * The model this session runs on arrives with the projections, some time
        * after the session opens. When it changes, the reasoning control has to
        * be re-derived: it exists only if that model takes a reasoning setting.
@@ -268,6 +295,8 @@ class RelaySession extends ChangeNotifier {
     try {
       await client.connect();
       _lastError = null;
+      /* The link is up, so start proving it stays up. */
+      _startHeartbeat();
       /*
        * An empty session browser has two very different causes — the sender
        * cannot reach its dsh at all, or its dsh simply has no sessions — and
@@ -745,6 +774,57 @@ class RelaySession extends ChangeNotifier {
     });
   }
 
+  /// Starts pinging the relay on a fixed cadence.
+  void _startHeartbeat() {
+    _pingTimer?.cancel();
+    _awaitingPong = false;
+    _pingTimer = Timer.periodic(_pingInterval, (_) => _heartbeat());
+  }
+
+  void _stopHeartbeat() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    _awaitingPong = false;
+  }
+
+  void _heartbeat() {
+    final client = _client;
+    if (client == null || _disposed) {
+      return;
+    }
+    if (_status != RelayStatus.connected) {
+      return;
+    }
+
+    if (_awaitingPong) {
+      /*
+       * The previous ping was never answered, so this link is dead even though
+       * the socket still looks open. Nothing else would notice: there is no
+       * close, no error, and on an idle watch no traffic either. Drop it and
+       * let the reconnect path run, rather than leaving the app on a link that
+       * reports connected and delivers nothing.
+       */
+      _dropDeadLink();
+      return;
+    }
+
+    _awaitingPong = true;
+    unawaited(client.ping());
+  }
+
+  /// Tears down a link that stopped answering, and reconnects if the user
+  /// still wants to be connected.
+  void _dropDeadLink() {
+    _stopHeartbeat();
+    _status = RelayStatus.failed;
+    _lastError = 'relay/keepalive: 连接已失效，正在重连';
+    unawaited(_teardown());
+    notifyListeners();
+    if (_reconnectWanted) {
+      _scheduleReconnect();
+    }
+  }
+
   /// Closes the connection and stops reconnecting.
   Future<void> disconnect() async {
     _reconnectWanted = false;
@@ -764,6 +844,7 @@ class RelaySession extends ChangeNotifier {
     store.clearMirror();
     _snapshotTimer?.cancel();
     _subscribeTimer?.cancel();
+    _stopHeartbeat();
 
     await _messageSubscription?.cancel();
     _messageSubscription = null;
