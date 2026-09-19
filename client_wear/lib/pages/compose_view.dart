@@ -560,26 +560,27 @@ class _ComposeViewState extends State<ComposeView>
       }
 
       /*
-       * "At the bottom" only means something when there is something to scroll.
-       * A transcript that fits on one screen has maxScrollExtent zero, and every
-       * comparison against it is then true — which pinned the composer open.
+       * "At the bottom" means the viewport is at the end of the transcript.
        *
-       * The threshold has to clear the composer's own bottom padding: the list
-       * reserves that space, so the true maxScrollExtent sits 64 dp past where
-       * the content visually ends.
+       * A transcript that fits on one screen has nothing to scroll, so every
+       * position in it is its end — and that is what this has to say, because
+       * both the follow-newest behaviour and the jump control are keyed off it.
+       *
+       * This used to require the list to be scrollable at all, which made a
+       * short conversation report "not at the bottom": an arriving reply did not
+       * scroll into view, and the jump control offered to take the reader
+       * somewhere they already were. The composer keeps the stricter test below,
+       * because it must not open itself onto a list with nowhere to scroll.
        */
-      final scrollable = metrics.maxScrollExtent > _composerHeight;
       final atBottom =
-          scrollable &&
           metrics.pixels >= metrics.maxScrollExtent - _composerHeight;
 
-      /* Drives the jump-to-newest control, which only has a job when there is
-       * something below the viewport. */
       if (atBottom != _atBottom) {
         setState(() => _atBottom = atBottom);
       }
 
-      if (atBottom) {
+      final scrollable = metrics.maxScrollExtent > _composerHeight;
+      if (scrollable && atBottom) {
         if (!_composerVisible) {
           setState(() => _composerVisible = true);
         }

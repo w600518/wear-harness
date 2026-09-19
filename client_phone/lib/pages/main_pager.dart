@@ -267,9 +267,15 @@ class _MainPagerState extends State<MainPager> {
     if (!position.hasContentDimensions || !position.hasViewportDimension) {
       return;
     }
-    final scrollable = position.maxScrollExtent > WearTokens.composerHeight;
+    /*
+     * Whether the viewport sits at the end of the transcript.
+     *
+     * No "is it scrollable" precondition: a conversation that fits on one
+     * screen is trivially at its own end, and requiring otherwise made the
+     * jump-to-newest control appear over it — offering to scroll somewhere the
+     * reader already was.
+     */
     final atBottom =
-        scrollable &&
         position.pixels >= position.maxScrollExtent - WearTokens.composerHeight;
     if (atBottom == _homeAtBottom) {
       return;
