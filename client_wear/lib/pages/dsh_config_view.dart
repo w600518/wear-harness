@@ -300,7 +300,7 @@ class _DshConfigViewState extends State<DshConfigView> {
       title: '目标',
       subtitle: hasGoal
           ? '${_phaseLabel(session.goalPhase)} · ${objective ?? ''}'
-          : '未设置目标',
+          : '暂无',
       trailing: const Icon(Icons.chevron_right_rounded),
       onTap: hasGoal
           ? () => Navigator.of(context).push(
@@ -309,7 +309,7 @@ class _DshConfigViewState extends State<DshConfigView> {
               ),
             )
           : null,
-      semanticLabel: hasGoal ? '目标 $objective' : '未设置目标',
+      semanticLabel: hasGoal ? '目标 $objective' : '目标，暂无',
     );
   }
 
@@ -910,7 +910,7 @@ class _GoalPageState extends State<_GoalPage> {
       listenable: widget.session,
       builder: (context, _) {
         final session = widget.session;
-        final objective = session.goalObjective ?? '未设置目标';
+        final objective = session.goalObjective ?? '暂无';
         final phase = _DshConfigViewState._phaseLabel(session.goalPhase);
         final paused = session.goalPhase == 'paused';
 

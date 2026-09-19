@@ -204,7 +204,7 @@ class _MainPagerState extends State<MainPager> {
           children: <Widget>[
             for (final effort in efforts)
               WearChip(
-                label: '${effort['name'] ?? effort['id']}',
+                label: session.reasoningLabel(effort),
                 selected: effort['id'] == current,
                 onTap: () => Navigator.of(sheetContext).pop('${effort['id']}'),
               ),

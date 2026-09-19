@@ -4,7 +4,7 @@ import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
 /// Shown on the settings row and on the About page.
-const String kAppVersion = 'V1.0.0';
+const String kAppVersion = 'V1.0.1';
 
 /// Page 3: the client's own settings — where the relay is, what secret unlocks
 /// it, and how this watch identifies itself.

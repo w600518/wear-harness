@@ -231,11 +231,13 @@ class RelaySession extends ChangeNotifier {
        * The model this session runs on arrives with the projections, some time
        * after the session opens. When it changes, the reasoning control has to
        * be re-derived: it exists only if that model takes a reasoning setting.
+       * The provider counts as part of that identity — two providers can carry
+       * the same model id under different reasoning ladders.
        */
-      final before = store.modelSelection?['model'];
+      final before = _modelIdentity();
       final wasRunning = store.turnRunning;
       store.applyMessage(message);
-      final after = store.modelSelection?['model'];
+      final after = _modelIdentity();
       if (after != before) {
         unawaited(refreshModelCapabilities());
       }
@@ -343,12 +345,29 @@ class RelaySession extends ChangeNotifier {
   /// True when the session's model takes a reasoning setting.
   bool get supportsReasoning => reasoningEfforts.isNotEmpty;
 
+  /// The provider/model pair the reasoning control is derived from.
+  ///
+  /// Used to notice a switch: the control has to be re-read whenever either
+  /// half changes, not only when the model id does.
+  String? _modelIdentity() {
+    final selection = store.modelSelection;
+    final provider = selection?['provider'];
+    final model = selection?['model'];
+    if (model is! String || model.isEmpty) {
+      return null;
+    }
+    return provider is String ? '$provider/$model' : model;
+  }
+
   /// Finds the catalog entry for the session's current model.
   ///
   /// The catalog is a tree of provider groups, so this walks it rather than
-  /// assuming a flat list.
+  /// assuming a flat list. The provider decides which group to look in first:
+  /// two providers can expose the same model id with different reasoning
+  /// ladders, and taking the first id match would then offer the wrong levels.
   Map<String, dynamic>? _catalogEntryFor(
     Map<String, dynamic> catalog,
+    String? provider,
     String? model,
   ) {
     if (model == null) {
@@ -358,6 +377,7 @@ class RelaySession extends ChangeNotifier {
     if (groups is! List) {
       return null;
     }
+    Map<String, dynamic>? fallback;
     for (final group in groups) {
       if (group is! Map<String, dynamic>) {
         continue;
@@ -367,12 +387,38 @@ class RelaySession extends ChangeNotifier {
         continue;
       }
       for (final entry in models) {
-        if (entry is Map<String, dynamic> && entry['id'] == model) {
+        if (entry is! Map<String, dynamic> || entry['id'] != model) {
+          continue;
+        }
+        if (provider != null && group['id'] == provider) {
           return entry;
         }
+        fallback ??= entry;
       }
     }
-    return null;
+    return fallback;
+  }
+
+  /// The label to show for one reasoning effort.
+  ///
+  /// Each model names its own levels and different providers name them
+  /// differently, so the host's own name always wins — the control follows
+  /// whatever the selected model calls its levels. Only when the catalog
+  /// leaves a level unnamed does the id get a readable label instead of a bare
+  /// `low` on screen.
+  String reasoningLabel(Map<String, dynamic> effort) {
+    final name = effort['name'];
+    if (name is String && name.isNotEmpty) {
+      return name;
+    }
+    return switch ('${effort['id']}') {
+      'off' => '关闭',
+      'low' => '低',
+      'medium' => '中',
+      'high' => '高',
+      'max' => '最高',
+      final other => other,
+    };
   }
 
   Timer? _capabilityRetry;
@@ -404,12 +450,20 @@ class RelaySession extends ChangeNotifier {
     final selection = store.modelSelection;
     final fromSelection = selection?['model'];
     Object? model = fromSelection;
+    Object? provider = selection?['provider'];
     if (model is! String || model.isEmpty) {
       final fallback = catalog['default'];
-      model = fallback is Map<String, dynamic> ? fallback['model'] : null;
+      if (fallback is Map<String, dynamic>) {
+        model = fallback['model'];
+        provider = fallback['provider'];
+      }
     }
 
-    final entry = _catalogEntryFor(catalog, model is String ? model : null);
+    final entry = _catalogEntryFor(
+      catalog,
+      provider is String ? provider : null,
+      model is String ? model : null,
+    );
     final reasoning = entry?['reasoning'];
     final efforts = reasoning is Map<String, dynamic>
         ? reasoning['efforts']
