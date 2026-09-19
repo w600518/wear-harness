@@ -112,15 +112,23 @@ class WearCard extends StatelessWidget {
           ).textTheme.bodySmall!.copyWith(color: secondary),
         );
 
+    /*
+     * The clip exists for the ripple: an InkWell paints its splash without
+     * regard for the shape, so the corners have to be trimmed. A card nothing
+     * can tap has no splash, and clipping it anyway put a layer on every
+     * static card in a list — which is most of them.
+     */
+    final tappable = onTap != null || onLongPress != null;
+
     return Semantics(
-      button: onTap != null || onLongPress != null,
+      button: tappable,
       selected: selected,
       label: semanticLabel,
       container: true,
       child: Material(
         color: background,
         shape: shape,
-        clipBehavior: Clip.antiAlias,
+        clipBehavior: tappable ? Clip.antiAlias : Clip.none,
         child: InkWell(
           onTap: onTap,
           onLongPress: onLongPress,

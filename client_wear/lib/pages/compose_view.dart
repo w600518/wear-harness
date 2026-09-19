@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../relay/session_store.dart';
+import '../state/active_listenable_builder.dart';
 import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
@@ -190,7 +191,6 @@ class _MessageDetailPageState extends State<_MessageDetailPage> {
         controller: scroll,
         topSpacer: 60,
         scalingEnabled: true,
-        edgeFade: true,
         itemCount: blocks.length,
         itemSpacing: WearTokens.itemSpacing,
         itemBuilder: (context, index, centerDistance) => blocks[index],
@@ -417,10 +417,19 @@ class ComposeView extends StatefulWidget {
     super.key,
     required this.session,
     required this.scrollController,
+    this.isActive = true,
   });
 
   final RelaySession session;
   final ScrollController scrollController;
+
+  /// Whether this page is the one the pager is resting on.
+  ///
+  /// A page that is not on screen keeps its state but stops following the
+  /// session, so a transcript being folded in under the loading mask — one
+  /// notification per frame — does not rebuild the three pages nobody is
+  /// looking at.
+  final bool isActive;
 
   @override
   State<ComposeView> createState() => _ComposeViewState();
@@ -692,9 +701,10 @@ class _ComposeViewState extends State<ComposeView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return ListenableBuilder(
+    return ActiveListenableBuilder(
+      active: widget.isActive,
       listenable: widget.session,
-      builder: (context, _) {
+      builder: (context) {
         final store = widget.session.store;
         final items = store.items;
 
@@ -731,9 +741,15 @@ class _ComposeViewState extends State<ComposeView>
 
         return Stack(
           children: <Widget>[
-            NotificationListener<ScrollNotification>(
-              onNotification: _onScroll,
-              child: ScalingLazyColumn(
+            /*
+             * The transcript gets its own layer too. While a session loads it
+             * is repainted on every batch that is folded in, and that repaint
+             * would otherwise reach the mask sitting above it.
+             */
+            RepaintBoundary(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _onScroll,
+                child: ScalingLazyColumn(
                 controller: widget.scrollController,
                 topSpacer: 60,
                 /*
@@ -742,7 +758,6 @@ class _ComposeViewState extends State<ComposeView>
                  * size while the user is reading it.
                  */
                 scalingEnabled: true,
-                edgeFade: true,
                 /* Room for the composer, which floats over the list. */
                 padding: const EdgeInsets.only(bottom: _composerHeight),
                 itemCount: turns.length + pending.length,
@@ -751,10 +766,19 @@ class _ComposeViewState extends State<ComposeView>
                     index < turns.length
                     ? _buildTurn(turns[index])
                     : _pendingEventCard(pending[index - turns.length]),
+                ),
               ),
             ),
             if (widget.session.isLoadingSession)
-              Positioned.fill(child: _loadingShield()),
+              /*
+               * Own layer, so the ring's animation and the list's repaints stay
+               * apart: the transcript is folded in behind this mask batch by
+               * batch, and without a boundary each side's repaint dragged the
+               * other along with it every frame.
+               */
+              Positioned.fill(
+                child: RepaintBoundary(child: _loadingShield()),
+              ),
             /*
              * Shown whenever the transcript is at its oldest row — not gated on
              * `hasMoreHistory`, which dsh only reports on some snapshots. With
@@ -936,9 +960,17 @@ class _ComposeViewState extends State<ComposeView>
   /// Without it the page shows an empty list for a moment, which on a watch
   /// reads as "this conversation is empty" rather than "this is still loading".
   Widget _loadingShield() {
-    final colors = Theme.of(context).colorScheme;
+    /*
+     * Opaque black, not a tinted surface.
+     *
+     * The transcript is folded in one message per frame behind this, so the
+     * mask covers a list that is actively changing. A translucent plate showed
+     * that churn through the mask and read as flicker rather than as loading;
+     * black hides it and matches the window background the app starts on, so
+     * the switch from the launch window to this is seamless.
+     */
     return ColoredBox(
-      color: colors.surface.withValues(alpha: 0.78),
+      color: Colors.black,
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -983,10 +1015,17 @@ class _ComposeViewState extends State<ComposeView>
               ],
             ),
             const SizedBox(height: WearTokens.space1),
-            SelectableText(
-              item.text,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+            /*
+             * Plain Text, matching the assistant bubble.
+             *
+             * A SelectableText carries its own selection controller, gesture
+             * arena entry and caret machinery, and a transcript holds dozens of
+             * them at once. The cost lands on the first layout and on every
+             * scroll — the work the loading mask had to cover, and what made a
+             * long conversation slow to appear once the mask lifted. Nothing on
+             * a 233dp panel needs text selection.
+             */
+            Text(item.text, style: Theme.of(context).textTheme.bodyMedium),
           ],
         ),
       ),
@@ -1226,9 +1265,8 @@ class _ComposeViewState extends State<ComposeView>
     );
   }
 
-  /// The trailing row: goal, todos, then either the field or the action chips.
+  /// The trailing row: either the field or the action chips.
   Widget _composer() {
-    final store = widget.session.store;
     final text = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
 
@@ -1249,24 +1287,15 @@ class _ComposeViewState extends State<ComposeView>
          */
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          if (store.goalLabel != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: WearTokens.space1),
-              child: Row(
-                children: <Widget>[
-                  Icon(Icons.flag_rounded, size: 14, color: colors.primary),
-                  const SizedBox(width: WearTokens.space1),
-                  Expanded(
-                    child: Text(
-                      store.goalLabel!,
-                      style: text.labelSmall,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          /*
+           * The goal is deliberately not shown here.
+           *
+           * A line above the composer carried the objective for the open
+           * session, but the transcript is the conversation and the composer is
+           * for writing in it; state that belongs to the session lives on its
+           * own page, where it can also be changed. Shown here it was dead
+           * text that pushed the field up by a row for the whole session.
+           */
           if (_composing)
             Padding(
               /*

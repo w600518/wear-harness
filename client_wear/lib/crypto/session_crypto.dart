@@ -42,6 +42,157 @@ class OpenedFrame {
   String get text => utf8.decode(payload);
 }
 
+/// One authenticated, decrypted frame, before any session state is touched.
+///
+/// Produced by [openFrameBytes], which is the whole of [SessionCrypto.open]
+/// apart from the replay bookkeeping. Splitting that out is what lets a large
+/// frame be opened on a worker isolate without a second copy of the wire rules
+/// existing anywhere.
+class OpenedFrameBytes {
+  const OpenedFrameBytes({
+    required this.type,
+    required this.sequence,
+    required this.payload,
+  });
+
+  final int type;
+  final int sequence;
+  final Uint8List payload;
+}
+
+/// Verifies and decrypts one frame, touching nothing but its arguments.
+///
+/// A session snapshot carries the entire conversation — hundreds of kilobytes —
+/// and running the HMAC, the AES pass and then the JSON decode of that inline
+/// blocked the main isolate for long enough to drop frames, which is the
+/// stutter seen while a conversation opens. This function is pure so the same
+/// work can be handed to a worker isolate; small frames stay on the main
+/// isolate, where a round trip to a worker would cost more than the work.
+///
+/// The validation order is the wire contract and is preserved exactly:
+/// magic/version/length, then the HMAC, then the sequence, then decryption. A
+/// tampered frame must be indistinguishable from noise, so it can never advance
+/// the replay window — which is why [receiveSequence] is checked here rather
+/// than by the caller after the fact.
+OpenedFrameBytes openFrameBytes({
+  required Uint8List frame,
+  required Uint8List decryptionKey,
+  required Uint8List receiveMacKey,
+  required int receiveSequence,
+}) {
+  final bytes = frame;
+
+  if (bytes.length < DshFrameLayout.minEncryptedLength) {
+    throw const DshFrameException(
+      DshFrameFailure.malformed,
+      'frame is shorter than header + one block + tag',
+    );
+  }
+  final header = _parseHeaderStrict(bytes);
+  if (header.isPlaintext) {
+    throw const DshFrameException(
+      DshFrameFailure.malformed,
+      'handshake frame arrived on an established channel',
+    );
+  }
+
+  final cipherLength = header.bodyLength;
+  if (cipherLength == 0 || cipherLength % Aes256Cbc.blockSize != 0) {
+    throw DshFrameException(
+      DshFrameFailure.malformed,
+      'ciphertext length $cipherLength is not a positive multiple of 16',
+    );
+  }
+  if (cipherLength !=
+      bytes.length - DshFrameLayout.headerLength - DshFrameLayout.tagLength) {
+    throw DshFrameException(
+      DshFrameFailure.malformed,
+      'ciphertext length $cipherLength does not match the frame size',
+    );
+  }
+
+  final signedLength = DshFrameLayout.headerLength + cipherLength;
+  final expectedTag = Digests.hmacSha256(
+    receiveMacKey,
+    Uint8List.sublistView(bytes, 0, signedLength),
+  );
+  final actualTag = Uint8List.sublistView(
+    bytes,
+    signedLength,
+    signedLength + DshFrameLayout.tagLength,
+  );
+  if (!constantTimeEquals(expectedTag, actualTag)) {
+    throw const DshFrameException(
+      DshFrameFailure.tampered,
+      'HMAC mismatch, frame was modified in transit',
+    );
+  }
+
+  if (header.sequence <= receiveSequence) {
+    throw DshFrameException(
+      DshFrameFailure.replay,
+      'sequence ${header.sequence} does not advance past $receiveSequence',
+    );
+  }
+
+  final Uint8List plain;
+  try {
+    plain = Aes256Cbc.decrypt(
+      key: decryptionKey,
+      iv: header.iv,
+      ciphertext: Uint8List.sublistView(
+        bytes,
+        DshFrameLayout.headerLength,
+        signedLength,
+      ),
+    );
+  } on AesPaddingException catch (error) {
+    throw DshFrameException(DshFrameFailure.padding, error.message);
+  }
+
+  return OpenedFrameBytes(
+    type: header.type,
+    sequence: header.sequence,
+    payload: plain,
+  );
+}
+
+/// [openFrameBytes] as a worker message.
+///
+/// `compute` carries a single argument, and every value here is one the
+/// platform can move between isolates.
+Map<String, Object> openFrameRequest({
+  required Uint8List frame,
+  required Uint8List decryptionKey,
+  required Uint8List receiveMacKey,
+  required int receiveSequence,
+}) => <String, Object>{
+  'frame': frame,
+  'decryptionKey': decryptionKey,
+  'receiveMacKey': receiveMacKey,
+  'receiveSequence': receiveSequence,
+};
+
+/// Worker entry point that also decodes the payload's JSON.
+///
+/// Used for frames big enough to be worth the trip. Decoding is the larger half
+/// of the cost — building the object tree from a few hundred kilobytes of text
+/// takes longer than the HMAC and the AES pass that produced it — so a snapshot
+/// would still stutter if only the decryption were moved off the main isolate.
+Map<String, Object?> openJsonInWorker(Map<String, Object> request) {
+  final opened = openFrameBytes(
+    frame: request['frame']! as Uint8List,
+    decryptionKey: request['decryptionKey']! as Uint8List,
+    receiveMacKey: request['receiveMacKey']! as Uint8List,
+    receiveSequence: request['receiveSequence']! as int,
+  );
+  return <String, Object?>{
+    'type': opened.type,
+    'sequence': opened.sequence,
+    'value': jsonDecode(utf8.decode(opened.payload)),
+  };
+}
+
 /// Authenticated encryption state for one relay connection.
 ///
 /// The client and the agent share the same derivation and therefore the same
@@ -146,86 +297,35 @@ class SessionCrypto {
 
   /// Verifies and decrypts a complete frame.
   ///
-  /// Validation order is the wire contract: magic/version/length first, then
-  /// the HMAC, then the sequence, and only then decryption. A tampered frame
-  /// must be indistinguishable from random noise, so it can never advance the
-  /// replay window.
+  /// Delegates to [openFrameBytes] so the wire rules exist once, and keeps the
+  /// replay window here: the check needs the live counter, and advancing it is
+  /// this object's, not a worker's, to do.
   OpenedFrame open(List<int> frame) {
     final bytes = frame is Uint8List ? frame : Uint8List.fromList(frame);
-
-    if (bytes.length < DshFrameLayout.minEncryptedLength) {
-      throw const DshFrameException(
-        DshFrameFailure.malformed,
-        'frame is shorter than header + one block + tag',
-      );
-    }
-    final header = _parseHeader(bytes);
-    if (header.isPlaintext) {
-      throw const DshFrameException(
-        DshFrameFailure.malformed,
-        'handshake frame arrived on an established channel',
-      );
-    }
-
-    final cipherLength = header.bodyLength;
-    if (cipherLength == 0 || cipherLength % Aes256Cbc.blockSize != 0) {
-      throw DshFrameException(
-        DshFrameFailure.malformed,
-        'ciphertext length $cipherLength is not a positive multiple of 16',
-      );
-    }
-    if (cipherLength !=
-        bytes.length - DshFrameLayout.headerLength - DshFrameLayout.tagLength) {
-      throw DshFrameException(
-        DshFrameFailure.malformed,
-        'ciphertext length $cipherLength does not match the frame size',
-      );
-    }
-
-    final signedLength = DshFrameLayout.headerLength + cipherLength;
-    final expectedTag = Digests.hmacSha256(
-      receiveMacKey,
-      bytes.sublist(0, signedLength),
+    final opened = openFrameBytes(
+      frame: bytes,
+      decryptionKey: decryptionKey,
+      receiveMacKey: receiveMacKey,
+      receiveSequence: _receiveSequence,
     );
-    final actualTag = bytes.sublist(
-      signedLength,
-      signedLength + DshFrameLayout.tagLength,
-    );
-    if (!constantTimeEquals(expectedTag, actualTag)) {
-      throw const DshFrameException(
-        DshFrameFailure.tampered,
-        'HMAC mismatch, frame was modified in transit',
-      );
-    }
-
-    if (header.sequence <= _receiveSequence) {
-      throw DshFrameException(
-        DshFrameFailure.replay,
-        'sequence ${header.sequence} does not advance past $_receiveSequence',
-      );
-    }
-
-    final Uint8List plain;
-    try {
-      plain = Aes256Cbc.decrypt(
-        key: decryptionKey,
-        iv: header.iv,
-        ciphertext: bytes.sublist(DshFrameLayout.headerLength, signedLength),
-      );
-    } on AesPaddingException catch (error) {
-      throw DshFrameException(DshFrameFailure.padding, error.message);
-    }
-
-    _receiveSequence = header.sequence;
+    _receiveSequence = opened.sequence;
     return OpenedFrame(
-      type: header.type,
-      sequence: header.sequence,
-      payload: plain,
+      type: opened.type,
+      sequence: opened.sequence,
+      payload: opened.payload,
     );
   }
 
-  /// Opens a frame and decodes its payload as UTF-8 JSON text.
-  String openText(List<int> frame) => open(frame).text;
+  /// Advances the replay window to a sequence a worker already validated.
+  ///
+  /// The worker checks the sequence against the counter it was handed and
+  /// refuses anything stale, but only this object may move the counter; the
+  /// caller moves it in arrival order.
+  void acceptReceiveSequence(int sequence) {
+    if (sequence > _receiveSequence) {
+      _receiveSequence = sequence;
+    }
+  }
 
   /// Fills [length] bytes from the platform CSPRNG. Used for IVs and nonces.
   Uint8List randomBytes(int length) {
@@ -235,15 +335,22 @@ class SessionCrypto {
     }
     return out;
   }
+}
 
-  static DshFrameHeader _parseHeader(Uint8List bytes) {
-    try {
-      return DshFrameHeader.parse(bytes);
-    } on DshFrameFormatException catch (error) {
-      throw DshFrameException(DshFrameFailure.malformed, error.message);
-    }
+/// Parses a header, reporting a format problem as the frame failure callers
+/// catch.
+///
+/// [DshFrameHeader.parse] raises its own format exception, and every frame path
+/// handles only [DshFrameException], so a malformed header would otherwise
+/// escape as an unhandled error.
+DshFrameHeader _parseHeaderStrict(Uint8List bytes) {
+  try {
+    return DshFrameHeader.parse(bytes);
+  } on DshFrameFormatException catch (error) {
+    throw DshFrameException(DshFrameFailure.malformed, error.message);
   }
 }
+
 
 /// The plaintext HELLO a client sends before keys exist.
 class DshHello {

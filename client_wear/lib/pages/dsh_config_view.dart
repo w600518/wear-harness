@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../state/active_listenable_builder.dart';
 import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
@@ -13,10 +14,17 @@ class DshConfigView extends StatefulWidget {
     super.key,
     required this.session,
     required this.scrollController,
+    this.isActive = true,
   });
 
   final RelaySession session;
   final ScrollController scrollController;
+
+  /// Whether this page is the one the pager is resting on.
+  ///
+  /// Off screen the page keeps its state but stops following the session, so a
+  /// snapshot folding into another page does not rebuild it every frame.
+  final bool isActive;
 
   @override
   State<DshConfigView> createState() => _DshConfigViewState();
@@ -84,9 +92,10 @@ class _DshConfigViewState extends State<DshConfigView> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    return ActiveListenableBuilder(
+      active: widget.isActive,
       listenable: widget.session,
-      builder: (context, _) {
+      builder: (context) {
         final session = widget.session;
         final store = session.store;
 
@@ -302,14 +311,18 @@ class _DshConfigViewState extends State<DshConfigView> {
           ? '${_phaseLabel(session.goalPhase)} · ${objective ?? ''}'
           : '暂无',
       trailing: const Icon(Icons.chevron_right_rounded),
-      onTap: hasGoal
-          ? () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => _GoalPage(session: session),
-              ),
-            )
-          : null,
-      semanticLabel: hasGoal ? '目标 $objective' : '目标，暂无',
+      /*
+       * Always openable. It used to be tappable only when a goal already
+       * existed, which left the page — and the only way to create one — out of
+       * reach for every session that had none: the feature could not be started
+       * from the watch at all.
+       */
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _GoalPage(session: session),
+        ),
+      ),
+      semanticLabel: hasGoal ? '目标 $objective' : '目标，暂无，点按新建',
     );
   }
 
@@ -987,14 +1000,44 @@ class _GoalPage extends StatefulWidget {
 class _GoalPageState extends State<_GoalPage> {
   bool _busy = false;
 
+  /// Why the last mutation failed, or null when it did not.
+  String? _error;
+
+  /*
+   * Owned by the state, never built in build().
+   *
+   * The column replaces its whole ScrollPosition when the controller's
+   * identity changes, and this page rebuilds on every session notification. A
+   * controller created per build therefore threw the list's position away each
+   * time, which left the rows laid out away from the viewport and their text
+   * cut off at the panel edge.
+   */
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
   /// Runs one mutation, guarding against a second tap while it is in flight.
+  ///
+  /// The session records a failure on itself rather than throwing, so the
+  /// message is read back once the call returns. Without that the buttons
+  /// appeared inert: a refused action produced no visible change at all.
   Future<void> _run(Future<void> Function() action) async {
     if (_busy) {
       return;
     }
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
       await action();
+      if (mounted) {
+        setState(() => _error = widget.session.lastError);
+      }
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -1015,6 +1058,20 @@ class _GoalPageState extends State<_GoalPage> {
     }
   }
 
+  /// Starts a new goal from the text the user types.
+  Future<void> _create() async {
+    final controller = TextEditingController();
+    final value = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => _GoalTextPage(controller: controller),
+      ),
+    );
+    controller.dispose();
+    if (value != null && value.trim().isNotEmpty) {
+      await _run(() => widget.session.createGoal(value));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
@@ -1024,70 +1081,134 @@ class _GoalPageState extends State<_GoalPage> {
       listenable: widget.session,
       builder: (context, _) {
         final session = widget.session;
+        final hasGoal = session.hasGoal;
         final objective = session.goalObjective ?? '暂无';
         final phase = _DshConfigViewState._phaseLabel(session.goalPhase);
         final paused = session.goalPhase == 'paused';
 
+        /*
+         * The same scaling column the other pages use, rather than a plain
+         * SingleChildScrollView, for two reasons: its heading is a row of the
+         * list and so scrolls with the content instead of sitting outside it,
+         * and it fills the panel — a bare scroll view left the scaffold's black
+         * showing below short content.
+         */
         return WearScaffold(
-          child: Padding(
-            padding: WearTokens.promptInsets,
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  Text(
+          timeTextController: _scroll,
+          overlays: <Widget>[PositionIndicator(controller: _scroll)],
+          child: ScalingLazyColumn(
+            controller: _scroll,
+            topSpacer: 45,
+            padding: const EdgeInsets.only(bottom: 25),
+            /*
+             * A fixed skeleton — heading, card, actions — with the spinner or
+             * the failure appended only while there is one to show. Tying the
+             * count to `hasGoal` instead meant the last slot changed identity as
+             * the goal appeared or disappeared, and it also left the spinner on
+             * screen permanently: `WearCircularProgress` without a `value` is
+             * indeterminate, so it swept its arc forever.
+             */
+            itemCount: 3 + (_busy || _error != null ? 1 : 0),
+            itemSpacing: WearTokens.itemSpacing,
+            itemBuilder: (context, index, centerDistance) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: WearTokens.space2,
+                  ),
+                  child: Text(
                     '目标',
                     style: text.titleMedium,
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: WearTokens.space2),
-                  WearCard(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: WearTokens.space3,
-                      vertical: WearTokens.space2,
-                    ),
-                    leading: Icon(Icons.flag_rounded, color: colors.primary),
-                    title: phase,
-                    subtitle: objective,
+                );
+              }
+
+              if (index == 1) {
+                return WearCard(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: WearTokens.space3,
+                    vertical: WearTokens.space2,
                   ),
-                  const SizedBox(height: WearTokens.space3),
-                  WearChipRow(
-                    alignment: WrapAlignment.center,
-                    children: <Widget>[
-                      /* Pause and resume are one position: only one of the two is
-                     * ever the meaningful action for the current phase. */
-                      if (paused)
-                        WearChip(
-                          label: '恢复',
-                          icon: Icons.play_arrow_rounded,
-                          onTap: _busy ? null : () => _run(session.resumeGoal),
-                        )
-                      else
-                        WearChip(
-                          label: '暂停',
-                          icon: Icons.pause_rounded,
-                          onTap: _busy ? null : () => _run(session.pauseGoal),
-                        ),
-                      WearChip(
-                        label: '修改',
-                        icon: Icons.edit_rounded,
-                        onTap: _busy ? null : () => _edit(objective),
-                      ),
-                      WearChip(
-                        label: '删除',
-                        icon: Icons.delete_outline_rounded,
-                        onTap: _busy ? null : () => _run(session.clearGoal),
-                      ),
-                    ],
+                  leading: Icon(Icons.flag_rounded, color: colors.primary),
+                  /* With no goal there is no phase to name, so the card states
+                   * the absence rather than showing an empty title. */
+                  title: hasGoal ? phase : '暂无',
+                  subtitle: hasGoal ? objective : '还没有为目标设定内容',
+                );
+              }
+
+              if (index == 3) {
+                if (_busy) {
+                  return const Center(
+                    child: WearCircularProgress(size: 20, strokeWidth: 2),
+                  );
+                }
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: WearTokens.space3,
                   ),
-                  const SizedBox(height: WearTokens.space2),
-                  if (_busy)
-                    const Center(
-                      child: WearCircularProgress(size: 20, strokeWidth: 2),
+                  child: Text(
+                    _error ?? '',
+                    style: text.bodySmall!.copyWith(
+                      color: colors.error,
+                      fontSize: 12,
                     ),
+                    textAlign: TextAlign.center,
+                    /* Six lines rather than four: a gateway refusal names the
+                     * endpoint and the offending field list, and cutting it
+                     * short hides exactly the part that says what is wrong. */
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                );
+              }
+
+              if (!hasGoal) {
+                /* Nothing to pause, edit or clear: the only action that means
+                 * anything is starting one. */
+                return WearChipRow(
+                  alignment: WrapAlignment.center,
+                  children: <Widget>[
+                    WearChip(
+                      label: '新建',
+                      icon: Icons.add_rounded,
+                      onTap: _busy ? null : _create,
+                    ),
+                  ],
+                );
+              }
+
+              return WearChipRow(
+                alignment: WrapAlignment.center,
+                children: <Widget>[
+                  /* Pause and resume are one position: only one of the two is
+                   * ever the meaningful action for the current phase. */
+                  if (paused)
+                    WearChip(
+                      label: '恢复',
+                      icon: Icons.play_arrow_rounded,
+                      onTap: _busy ? null : () => _run(session.resumeGoal),
+                    )
+                  else
+                    WearChip(
+                      label: '暂停',
+                      icon: Icons.pause_rounded,
+                      onTap: _busy ? null : () => _run(session.pauseGoal),
+                    ),
+                  WearChip(
+                    label: '修改',
+                    icon: Icons.edit_rounded,
+                    onTap: _busy ? null : () => _edit(objective),
+                  ),
+                  WearChip(
+                    label: '删除',
+                    icon: Icons.delete_outline_rounded,
+                    onTap: _busy ? null : () => _run(session.clearGoal),
+                  ),
                 ],
-              ),
-            ),
+              );
+            },
           ),
         );
       },

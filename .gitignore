@@ -34,3 +34,5 @@ _publish.*
 *.swp
 Thumbs.db
 desktop.ini
+_sync.mjs
+frameprobe.log

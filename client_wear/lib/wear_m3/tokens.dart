@@ -114,12 +114,6 @@ abstract final class WearTokens {
     space4,
   );
 
-  /// Height of the top and bottom fade applied to the list viewport.
-  ///
-  /// Short on purpose: the shaded band at the edges was washing out the first
-  /// and last rows, so the gradient resolves close to the edge instead.
-  static const double edgeFadeExtent = 14;
-
   // ── position indicator ────────────────────────────────────────────────
   /// A hairline, as on the watch's own apps: the bar on a round panel has to
   /// read without taking width away from the cards beside it.

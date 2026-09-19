@@ -32,7 +32,6 @@ class ScalingLazyColumn extends StatefulWidget {
     this.padding,
     this.anchor = 0.5,
     this.scalingEnabled = true,
-    this.edgeFade = true,
     /*
      * On: the ends are padded by half a viewport so content sits across the
      * middle of the panel. Position only — nothing is clipped or narrowed, and
@@ -77,9 +76,6 @@ class ScalingLazyColumn extends StatefulWidget {
   /// past it the space is gone. A fixed padding would hold that gap open for
   /// the whole session.
   final double topSpacer;
-
-  /// Fades the list out towards the top and bottom edges.
-  final bool edgeFade;
 
   /// Adds just enough vertical padding for the first and last entry to reach
   /// [anchor]. Without it the ends of the list can never be centred, which is
@@ -307,32 +303,20 @@ class _ScalingLazyColumnState extends State<ScalingLazyColumn> {
           },
         );
 
-        if (widget.edgeFade && widget.scalingEnabled) {
-          final fade = viewportHeight.isFinite && viewportHeight > 0
-              ? (WearTokens.edgeFadeExtent / viewportHeight).clamp(0.0, 0.35)
-              : 0.08;
-          list = ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (rect) => LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              /*
-               * Opaque all the way to the bottom edge, then fading out. Only the
-               * bottom fades: the top of the panel carries the clock and the
-               * first rows of a list, and washing those out made the top of
-               * every page look dimmer than the rest of it.
-               */
-              colors: const <Color>[
-                Color(0xFF000000),
-                Color(0xFF000000),
-                Color(0x00000000),
-              ],
-              stops: <double>[0.0, 1 - fade, 1.0],
-            ).createShader(rect),
-            child: list,
-          );
-        }
-
+        /*
+         * No ShaderMask here, deliberately.
+         *
+         * The column used to wrap itself in one to fade the ends out, and it
+         * was the most expensive thing on the page: a ShaderMask renders its
+         * child into an offscreen layer and then composites it back through a
+         * gradient, every frame, over a list as tall as the transcript. On a
+         * transcript that repaints as records fold in, that compositing is what
+         * the frame budget went on.
+         *
+         * Each entry already fades itself as it leaves the anchor — see the
+         * opacity in [_ScalingItemState] — so the mask was drawing a second,
+         * stronger version of an effect that was already there.
+         */
         return NotificationListener<ScrollNotification>(
           onNotification: _handleNotification,
           child: list,
@@ -460,6 +444,17 @@ class _ScalingItemState extends State<_ScalingItem> {
           1.0,
           1.0 - distance,
         )!;
+
+        /*
+         * The entry under the reader's eye is the common case, and at distance
+         * zero both wrappers are no-ops that still cost a layer each. Skipping
+         * them leaves the centre entry painted directly, which is most of what
+         * is on screen at any moment.
+         */
+        if (scale >= 0.999 && opacity >= 0.999) {
+          return inner ?? const SizedBox.shrink();
+        }
+
         return Opacity(
           opacity: opacity,
           child: Transform.scale(

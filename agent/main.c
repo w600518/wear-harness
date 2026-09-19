@@ -523,6 +523,137 @@ static void capture_vanished(agent_state *a, const char *previous, size_t previo
     dsh_json_free(after);
 }
 
+/* ── trimming the session list ──────────────────────────────────────────── */
+
+/*
+ * Projections the watch actually reads.
+ *
+ * Two lists, because what a session needs depends on whether it is the one on
+ * screen. The watch folds projections into state for the open session only —
+ * the rest of the list is drawn from `title` and `sessionStats` — yet the same
+ * `permissions` table and `modelSelection` block were sent for every session.
+ * Measured over a real list, those two were 99% and 96% duplicate: 47 KB
+ * carrying 1 KB of information, decrypted and parsed 136 times to be discarded
+ * 135 times.
+ */
+static int projection_is_wanted(const char *key, size_t len, int opened) {
+    static const char *const opened_keys[] = {
+        "title", "sessionStats", "modelSelection", "permissions",
+        "goal", "todos", "agentPreset"
+    };
+    static const char *const listed_keys[] = {
+        "title", "sessionStats"
+    };
+    const char *const *wanted = opened ? opened_keys : listed_keys;
+    size_t count = opened
+        ? sizeof(opened_keys) / sizeof(opened_keys[0])
+        : sizeof(listed_keys) / sizeof(listed_keys[0]);
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (strlen(wanted[i]) == len && memcmp(wanted[i], key, len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Writes `projections.values` keeping only the keys the watch reads. */
+static void write_trimmed_values(const dsh_json *values, dsh_sb *out, int opened) {
+    size_t i;
+    int written = 0;
+
+    dsh_sb_puts(out, "{");
+    for (i = 0; i < values->u.obj.count; i++) {
+        const char *key = values->u.obj.keys[i];
+        size_t key_len = values->u.obj.keylens[i];
+
+        if (!projection_is_wanted(key, key_len, opened)) {
+            continue;
+        }
+        if (written) {
+            dsh_sb_puts(out, ",");
+        }
+        dsh_sb_put_json_string(out, key, key_len);
+        dsh_sb_puts(out, ":");
+        dsh_json_write(values->u.obj.vals[i], out);
+        written = 1;
+    }
+    dsh_sb_puts(out, "}");
+}
+
+/* True when [session] is one the watch is currently following. */
+static int session_is_followed(const agent_state *a, const dsh_json *session) {
+    const char *id = dsh_json_string(dsh_json_get(session, "sessionId"), "", NULL);
+    size_t i;
+
+    if (id[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < MAX_FOLLOWS; i++) {
+        if (a->follows[i].active &&
+            strcmp(a->follows[i].session_id, id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Writes the session array, trimming each session's projections. */
+static void write_trimmed_sessions(const agent_state *a, const dsh_json *items, dsh_sb *out) {
+    size_t i;
+
+    dsh_sb_puts(out, "[");
+    for (i = 0; i < items->u.arr.count; i++) {
+        const dsh_json *session = items->u.arr.items[i];
+        size_t k;
+        int written = 0;
+        int opened;
+
+        if (i > 0) {
+            dsh_sb_puts(out, ",");
+        }
+        if (session == NULL || session->type != DSH_JSON_OBJ) {
+            dsh_sb_puts(out, "{}");
+            continue;
+        }
+        opened = session_is_followed(a, session);
+
+        dsh_sb_puts(out, "{");
+        for (k = 0; k < session->u.obj.count; k++) {
+            const char *key = session->u.obj.keys[k];
+            size_t key_len = session->u.obj.keylens[k];
+            const dsh_json *val = session->u.obj.vals[k];
+            const dsh_json *values = NULL;
+
+            if (val != NULL && val->type == DSH_JSON_OBJ &&
+                key_len == strlen("projections") &&
+                memcmp("projections", key, key_len) == 0) {
+                const dsh_json *inner = dsh_json_get(val, "values");
+                if (inner != NULL && inner->type == DSH_JSON_OBJ) {
+                    values = inner;
+                }
+            }
+
+            if (written) {
+                dsh_sb_puts(out, ",");
+            }
+            dsh_sb_put_json_string(out, key, key_len);
+            dsh_sb_puts(out, ":");
+            if (values != NULL) {
+                dsh_sb_puts(out, "{\"values\":");
+                write_trimmed_values(values, out, opened);
+                dsh_sb_puts(out, "}");
+            } else {
+                dsh_json_write(val, out);
+            }
+            written = 1;
+        }
+        dsh_sb_puts(out, "}");
+    }
+    dsh_sb_puts(out, "]");
+}
+
 static void mirror_session_list(agent_state *a) {
     dsh_sb value;
     dsh_sb error;
@@ -583,11 +714,14 @@ static void mirror_session_list(agent_state *a) {
             dsh_sb_put_json_string(&payload, a->device_name, strlen(a->device_name));
             dsh_sb_puts(&payload, ",\"sessions\":");
             {
-                /* The RPC value is {items:[...]}; forward the array itself. */
+                /* The RPC value is {items:[...]}; forward the array itself,
+                 * with each session's projections cut down to what the watch
+                 * reads. The cache keeps the untrimmed bytes so a change the
+                 * watch never sees still counts as a change here. */
                 dsh_json *root = dsh_json_parse(value.buf != NULL ? value.buf : "", value.len);
                 const dsh_json *items = (root != NULL) ? dsh_json_get(root, "items") : NULL;
-                if (items != NULL) {
-                    dsh_json_write(items, &payload);
+                if (items != NULL && items->type == DSH_JSON_ARR) {
+                    write_trimmed_sessions(a, items, &payload);
                 } else {
                     dsh_sb_puts(&payload, "[]");
                 }
@@ -789,6 +923,90 @@ static void stop_all_follows(agent_state *a) {
 }
 
 /* Forwards one dsh follow frame to the relay. */
+/* ── trimming a snapshot's records ──────────────────────────────────────── */
+
+/*
+ * Record types the watch ignores.
+ *
+ * Its own event handling names exactly which types it acts on; these are the
+ * rest — the ones it folds and then does nothing with. `request/context` alone
+ * carries a full request envelope, one per turn, so a snapshot of a few hundred
+ * turns spends a large part of its megabyte on records that are parsed only to
+ * be dropped. The watch decrypts and parses every byte that arrives, and
+ * measurement put a 1 MB snapshot at more than two seconds of that.
+ */
+static int record_is_wanted(const dsh_json *record) {
+    static const char *const ignored[] = {
+        "session/end-seed", "step/start", "step/end",
+        "request/header", "request/context",
+        "agent/inbox/spliced", "chunkrow/tool-call-chunks"
+    };
+    const dsh_json *event = dsh_json_get(record, "event");
+    const dsh_json *node =
+        (event != NULL && event->type == DSH_JSON_OBJ) ? event : record;
+    const char *type = dsh_json_string(dsh_json_get(node, "type"), "", NULL);
+    size_t i;
+
+    if (type[0] == '\0') {
+        /* Not readable as an event: pass it through rather than guess. */
+        return 1;
+    }
+    for (i = 0; i < sizeof(ignored) / sizeof(ignored[0]); i++) {
+        if (strcmp(ignored[i], type) == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * How many of a snapshot's records are forwarded.
+ *
+ * A long conversation's snapshot is its entire history: the one measured here
+ * was 910 KB and cost the watch two seconds to decrypt and parse, which is
+ * almost the whole time its loading mask was up. Trimming record types was not
+ * enough — what remains is the messages themselves, and a 258-turn conversation
+ * simply has a lot of them.
+ *
+ * The watch opens on the newest messages regardless, and everything older is
+ * reachable through the paging the session browser already offers: it asks for
+ * what precedes the oldest record it holds, and the sender answers that with
+ * `session/page`. Sending the tail changes how much arrives at once, not what
+ * can be reached.
+ */
+#define SNAPSHOT_MAX_RECORDS 300
+
+/* Writes the record array, dropping the ignored types and keeping the tail. */
+static void write_trimmed_records(const dsh_json *records, dsh_sb *out) {
+    size_t i;
+    size_t start = 0;
+    int written = 0;
+
+    /*
+     * Records arrive in sequence order, so keeping the tail is what leaves the
+     * newest ones — the messages the conversation opens on.
+     */
+    if (records->u.arr.count > SNAPSHOT_MAX_RECORDS) {
+        start = records->u.arr.count - SNAPSHOT_MAX_RECORDS;
+        DSH_INFO("snapshot trimmed: %d of %d records forwarded",
+                 (int)SNAPSHOT_MAX_RECORDS, (int)records->u.arr.count);
+    }
+
+    dsh_sb_puts(out, "[");
+    for (i = start; i < records->u.arr.count; i++) {
+        const dsh_json *record = records->u.arr.items[i];
+        if (record == NULL || !record_is_wanted(record)) {
+            continue;
+        }
+        if (written) {
+            dsh_sb_puts(out, ",");
+        }
+        dsh_json_write(record, out);
+        written = 1;
+    }
+    dsh_sb_puts(out, "]");
+}
+
 static void forward_follow_value(agent_state *a, follow_stream *stream, const dsh_json *value) {
     const char *type = dsh_json_string(dsh_json_get(value, "type"), "", NULL);
 
@@ -808,20 +1026,17 @@ static void forward_follow_value(agent_state *a, follow_stream *stream, const ds
         dsh_sb_put_json_string(&payload, stream->session_id, strlen(stream->session_id));
         dsh_sb_puts(&payload, ",\"cursor\":");
         dsh_sb_put_i64(&payload, stream->cursor);
-        dsh_sb_puts(&payload, ",\"header\":");
-        {
-            const dsh_json *header = dsh_json_get(value, "header");
-            if (header != NULL) {
-                dsh_json_write(header, &payload);
-            } else {
-                dsh_sb_puts(&payload, "{}");
-            }
-        }
+        /*
+         * The snapshot's `header` is deliberately not forwarded. The watch's
+         * handling reads `session`, `cursor`, `records` and `projections` and
+         * nothing else, so the header was carried across the tunnel only to be
+         * decrypted, parsed and dropped.
+         */
         dsh_sb_puts(&payload, ",\"records\":");
         {
             const dsh_json *records = dsh_json_get(value, "records");
-            if (records != NULL) {
-                dsh_json_write(records, &payload);
+            if (records != NULL && records->type == DSH_JSON_ARR) {
+                write_trimmed_records(records, &payload);
             } else {
                 dsh_sb_puts(&payload, "[]");
             }
@@ -829,8 +1044,18 @@ static void forward_follow_value(agent_state *a, follow_stream *stream, const ds
         dsh_sb_puts(&payload, ",\"projections\":");
         {
             const dsh_json *projections = dsh_json_get(value, "projections");
-            if (projections != NULL) {
-                dsh_json_write(projections, &payload);
+            if (projections != NULL && projections->type == DSH_JSON_OBJ) {
+                /* A baseline arrives as {asOfSeq, values}; the watch unwraps
+                 * `values`, so that is the level worth trimming. This is the
+                 * session the watch opened, so it keeps the full set. */
+                const dsh_json *values = dsh_json_get(projections, "values");
+                if (values != NULL && values->type == DSH_JSON_OBJ) {
+                    dsh_sb_puts(&payload, "{\"values\":");
+                    write_trimmed_values(values, &payload, 1);
+                    dsh_sb_puts(&payload, "}");
+                } else {
+                    write_trimmed_values(projections, &payload, 1);
+                }
             } else {
                 dsh_sb_puts(&payload, "{}");
             }
@@ -993,7 +1218,18 @@ static void handle_mux_message(agent_state *a, const char *json, size_t len) {
 /*
  * Maps the small client vocabulary onto dsh's own endpoints. `wrap` names the
  * single argument key dsh expects; NULL means the endpoint takes no arguments.
+ *
+ * RAW_ARGS marks an endpoint whose arguments are the payload itself. Most dsh
+ * endpoints take one named argument object and this map names its key —
+ * `session/prompt` is `prompt(agent, request)`, so its payload belongs under
+ * `request`. The goal endpoints are not shaped that way: `pause(agent, ref)` and
+ * its siblings take `agent` and `ref` at the top level, and `edit` / `create`
+ * add a `request` of their own. Naming a key for them buried the agent and the
+ * reference one level down, so every goal action reached dsh with neither and
+ * was refused — the buttons did nothing and said nothing.
  */
+#define RAW_ARGS "-"
+
 static const struct {
     const char *relay_method;
     const char *endpoint;
@@ -1008,12 +1244,12 @@ static const struct {
     { "session/fork",        "session/fork",        "request"  },
     { "session/selectModel", "session/selectModel", "request"  },
     { "session/updateQueue", "session/updateQueue", "request"  },
-    { "goals/create",        "goals/create",        "request"  },
-    { "goals/edit",          "goals/edit",          "request"  },
-    { "goals/pause",         "goals/pause",         "request"  },
-    { "goals/resume",        "goals/resume",        "request"  },
-    { "goals/complete",      "goals/complete",      "request"  },
-    { "goals/clear",         "goals/clear",         "request"  },
+    { "goals/create",        "goals/create",        RAW_ARGS   },
+    { "goals/edit",          "goals/edit",          RAW_ARGS   },
+    { "goals/pause",         "goals/pause",         RAW_ARGS   },
+    { "goals/resume",        "goals/resume",        RAW_ARGS   },
+    { "goals/complete",      "goals/complete",      RAW_ARGS   },
+    { "goals/clear",         "goals/clear",         RAW_ARGS   },
     { "workspace/archiveSession", "workspace/archiveSession", "request" },
     { "workspace/create",    "workspace/create",    "request"  },
     { "workspace/rename",    "workspace/rename",    "request"  },
@@ -1088,6 +1324,14 @@ static void build_args(const char *wrap, const dsh_json *payload, dsh_sb *out) {
         dsh_sb_puts(out, "{}");
         return;
     }
+    if (strcmp(wrap, RAW_ARGS) == 0) {
+        if (payload != NULL) {
+            dsh_json_write(payload, out);
+        } else {
+            dsh_sb_puts(out, "{}");
+        }
+        return;
+    }
     dsh_sb_putc(out, '{');
     dsh_sb_put_json_string(out, wrap, strlen(wrap));
     dsh_sb_putc(out, ':');
@@ -1134,6 +1378,115 @@ static void handle_request(agent_state *a, dsh_message *msg) {
                       followed);
         reply_result(a, msg->id, value.buf, value.len);
         dsh_sb_free(&value);
+        return;
+    }
+
+    /*
+     * Everything the watch needs on the way in, answered in one round trip.
+     *
+     * Opening the app, and opening a conversation inside it, each used to cost
+     * three or four separate requests — the relay status, the session list, the
+     * model catalog, the balance — and each came back on its own, so the client
+     * parsed and rebuilt several times before the page settled. All of them are
+     * request/response shapes against the same loopback dsh, so the sender can
+     * collect them together and the client can apply one result.
+     *
+     * The subscribe paths are deliberately not folded in: they open streams,
+     * and a stream is not a value that fits in a reply.
+     *
+     * Each part defaults on. A caller that already holds one of them — the
+     * composer keeps the session list — turns it off rather than paying to
+     * receive and parse it again.
+     */
+    if (strcmp(method_buf, "relay/bundle") == 0) {
+        dsh_sb value;
+        dsh_sb part;
+        dsh_sb error;
+        dsh_sb error_code;
+        dsh_sb failures;
+        int want_sessions = dsh_json_bool(dsh_json_get(payload, "sessions"), 1);
+        int want_catalog = dsh_json_bool(dsh_json_get(payload, "catalog"), 1);
+        int want_balance = dsh_json_bool(dsh_json_get(payload, "balance"), 1);
+        int followed = 0;
+
+        for (i = 0; i < MAX_FOLLOWS; i++) {
+            if (a->follows[i].active) {
+                followed++;
+            }
+        }
+
+        dsh_sb_init(&value);
+        dsh_sb_init(&part);
+        dsh_sb_init(&error);
+        dsh_sb_init(&error_code);
+        dsh_sb_init(&failures);
+
+        dsh_sb_printf(&value,
+                      "{\"status\":{\"device\":\"%s\",\"agentVersion\":\"" DSH_AGENT_VERSION "\","
+                      "\"dshReachable\":%s,\"eventMux\":%s,\"followedSessions\":%d}",
+                      a->device_name,
+                      a->dsh_ready ? "true" : "false",
+                      a->ws_ready ? "true" : "false",
+                      followed);
+
+        if (want_sessions) {
+            dsh_sb_reset(&part);
+            dsh_sb_reset(&error);
+            dsh_sb_reset(&error_code);
+            if (dsh_rpc_call(&a->http, "session/list",
+                             DSH_ARGS_SESSION_LIST, sizeof(DSH_ARGS_SESSION_LIST) - 1,
+                             &part, &error, &error_code) == 0) {
+                dsh_sb_puts(&value, ",\"sessions\":");
+                dsh_sb_put_json_raw(&value, part.buf, part.len);
+            } else {
+                if (failures.len > 0) dsh_sb_puts(&failures, ",");
+                dsh_sb_printf(&failures, "\"sessions\":\"%s\"",
+                              error_code.len > 0 ? error_code.buf : "relay/transport");
+            }
+        }
+
+        if (want_catalog) {
+            dsh_sb_reset(&part);
+            dsh_sb_reset(&error);
+            dsh_sb_reset(&error_code);
+            if (dsh_rpc_call(&a->http, "session/modelCatalog", NULL, 0,
+                             &part, &error, &error_code) == 0) {
+                dsh_sb_puts(&value, ",\"catalog\":");
+                dsh_sb_put_json_raw(&value, part.buf, part.len);
+            } else {
+                if (failures.len > 0) dsh_sb_puts(&failures, ",");
+                dsh_sb_printf(&failures, "\"catalog\":\"%s\"",
+                              error_code.len > 0 ? error_code.buf : "relay/transport");
+            }
+        }
+
+        if (want_balance) {
+            int balance_status = 0;
+            dsh_sb_reset(&part);
+            if (dsh_http_get(&a->http, "/dsh-whale/balance.json", &part, &balance_status) == 0 &&
+                balance_status == 200) {
+                dsh_sb_puts(&value, ",\"balance\":");
+                dsh_sb_put_json_raw(&value, part.buf, part.len);
+            } else {
+                if (failures.len > 0) dsh_sb_puts(&failures, ",");
+                dsh_sb_puts(&failures, "\"balance\":\"relay/balance-unavailable\"");
+            }
+        }
+
+        if (failures.len > 0) {
+            dsh_sb_puts(&value, ",\"errors\":{");
+            dsh_sb_put(&value, failures.buf, failures.len);
+            dsh_sb_puts(&value, "}");
+        }
+        dsh_sb_puts(&value, "}");
+
+        reply_result(a, msg->id, value.buf, value.len);
+
+        dsh_sb_free(&value);
+        dsh_sb_free(&part);
+        dsh_sb_free(&error);
+        dsh_sb_free(&error_code);
+        dsh_sb_free(&failures);
         return;
     }
 

@@ -326,8 +326,72 @@ class RelayClient {
     final held = List<Uint8List>.from(_heldFrames);
     _heldFrames.clear();
     for (final frame in held) {
-      _dispatch(frame, false);
+      _enqueue(frame, false);
     }
+  }
+
+  /// Frames whose size makes them worth opening off the main isolate.
+  ///
+  /// A session snapshot carries the whole conversation — hundreds of kilobytes
+  /// — and the HMAC, the AES pass and the JSON decode of that inline blocked
+  /// the main isolate for long enough to drop frames: the stutter seen while a
+  /// conversation opens. Streaming chunks are a few hundred bytes each and
+  /// arrive constantly, and for those a round trip to a worker would cost more
+  /// than the work itself, so they stay here.
+  static const int _workerFrameThreshold = 32 * 1024;
+
+  /// Serialises frame handling.
+  ///
+  /// Frames are only valid in strictly increasing sequence order, so opening
+  /// one off the main isolate must not let the next overtake it. Every frame
+  /// goes through this chain, and each waits for the one before it to finish —
+  /// including its state update — before it starts.
+  Future<void> _dispatchChain = Future<void>.value();
+
+  void _enqueue(Uint8List frame, bool plain) {
+    _dispatchChain = _dispatchChain
+        .then((_) => _dispatch(frame, plain))
+        .catchError((Object _) {
+          /* _dispatch reports its own failures; this only keeps the chain
+           * alive so one bad frame cannot stop every frame after it. */
+        });
+  }
+
+  /// Opens a frame, on a worker isolate when it is large enough to matter.
+  ///
+  /// Returns the decoded JSON alongside the frame's own fields, because the
+  /// decode is the expensive half and belongs on the worker with the rest.
+  Future<Map<String, Object?>> _openJson(Uint8List frame) async {
+    final crypto = _crypto;
+    if (crypto == null) {
+      throw StateError('no session keys');
+    }
+    if (frame.length < _workerFrameThreshold) {
+      final opened = crypto.open(frame);
+      return <String, Object?>{
+        'type': opened.type,
+        'sequence': opened.sequence,
+        'value': jsonDecode(opened.text),
+      };
+    }
+
+    final result = await compute(
+      openJsonInWorker,
+      openFrameRequest(
+        frame: frame,
+        decryptionKey: crypto.decryptionKey,
+        receiveMacKey: crypto.receiveMacKey,
+        receiveSequence: crypto.receiveSequence,
+      ),
+    );
+
+    /*
+     * The worker verified the MAC and checked the sequence against the counter
+     * it was given; advancing the live counter stays here, in arrival order,
+     * because this is the only place that owns it.
+     */
+    crypto.acceptReceiveSequence(result['sequence']! as int);
+    return result;
   }
 
   /// Sends `request` and resolves with the sender's `value`.
@@ -637,11 +701,11 @@ class RelayClient {
         return;
       }
       _consume(total);
-      _dispatch(frame, plain);
+      _enqueue(frame, plain);
     }
   }
 
-  void _dispatch(Uint8List frame, bool plain) {
+  Future<void> _dispatch(Uint8List frame, bool plain) async {
     if (plain) {
       final ackCompleter = _ackCompleter;
       if (ackCompleter == null || ackCompleter.isCompleted) {
@@ -701,9 +765,9 @@ class RelayClient {
       return;
     }
 
-    final OpenedFrame opened;
+    final Map<String, Object?> opened;
     try {
-      opened = crypto.open(frame);
+      opened = await _openJson(frame);
     } on DshFrameException catch (error) {
       /*
        * A replayed or tampered frame is dropped rather than fatal: the counter
@@ -715,14 +779,13 @@ class RelayClient {
         RelayException('relay/${error.failure.name}', error.message),
       );
       return;
-    }
-
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(opened.text);
     } on FormatException {
+      /* The payload was not JSON. Nothing to report: the frame itself was
+       * authentic, there is simply no message in it. */
       return;
     }
+
+    final decoded = opened['value'];
     if (decoded is! Map<String, dynamic>) {
       return;
     }

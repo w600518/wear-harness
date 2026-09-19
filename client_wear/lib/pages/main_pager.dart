@@ -479,6 +479,7 @@ class _MainPagerState extends State<MainPager> {
               session: widget.session,
               scrollController: _sessionScroll,
               onOpened: () => _goTo(_homeIndex),
+              isActive: _index == 0,
             ),
           ),
           ColoredBox(
@@ -486,6 +487,7 @@ class _MainPagerState extends State<MainPager> {
             child: ComposeView(
               session: widget.session,
               scrollController: _homeScroll,
+              isActive: _index == _homeIndex,
             ),
           ),
           ColoredBox(
@@ -493,6 +495,7 @@ class _MainPagerState extends State<MainPager> {
             child: DshConfigView(
               session: widget.session,
               scrollController: _configScroll,
+              isActive: _index == 2,
             ),
           ),
           ColoredBox(
@@ -500,6 +503,7 @@ class _MainPagerState extends State<MainPager> {
             child: ClientSettingsView(
               session: widget.session,
               scrollController: _settingsScroll,
+              isActive: _index == 3,
             ),
           ),
         ],

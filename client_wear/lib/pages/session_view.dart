@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../state/active_listenable_builder.dart';
 import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
@@ -16,6 +17,7 @@ class SessionView extends StatefulWidget {
     required this.session,
     required this.scrollController,
     this.onOpened,
+    this.isActive = true,
   });
 
   final RelaySession session;
@@ -23,6 +25,12 @@ class SessionView extends StatefulWidget {
 
   /// Invoked after a session is selected, so the pager can advance.
   final VoidCallback? onOpened;
+
+  /// Whether this page is the one the pager is resting on.
+  ///
+  /// Off screen the page keeps its state but stops following the session, so it
+  /// is not rebuilt on every frame of a snapshot being folded into another page.
+  final bool isActive;
 
   @override
   State<SessionView> createState() => _SessionViewState();
@@ -470,9 +478,10 @@ class _SessionViewState extends State<SessionView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return ListenableBuilder(
+    return ActiveListenableBuilder(
+      active: widget.isActive,
       listenable: widget.session,
-      builder: (context, _) {
+      builder: (context) {
         final session = widget.session;
         final groups = _grouped;
         final devices = session.devices;

@@ -95,7 +95,19 @@ class _WearCircularProgressState extends State<WearCircularProgress>
       ring = Semantics(label: semanticsValue ?? 'Loading', child: ring);
     }
 
-    return SizedBox.square(dimension: widget.size, child: ring);
+    return SizedBox.square(
+      dimension: widget.size,
+      /*
+       * The ring gets its own layer.
+       *
+       * An indeterminate ring repaints every frame for as long as it is on
+       * screen, and with no boundary here that repaint propagates up to the
+       * enclosing layer. On the loading mask that meant repainting everything
+       * underneath it — the whole transcript, growing batch by batch — sixty
+       * times a second, to animate an arc 34dp across.
+       */
+      child: RepaintBoundary(child: ring),
+    );
   }
 }
 

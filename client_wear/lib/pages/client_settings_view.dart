@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../state/active_listenable_builder.dart';
 import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
 /// Shown on the settings row and on the About page.
-const String kAppVersion = 'V1.0.3';
+const String kAppVersion = 'V1.0.4';
 
 /// Page 3: the client's own settings — where the relay is, what secret unlocks
 /// it, and how this watch identifies itself.
@@ -20,10 +21,17 @@ class ClientSettingsView extends StatefulWidget {
     super.key,
     required this.session,
     required this.scrollController,
+    this.isActive = true,
   });
 
   final RelaySession session;
   final ScrollController scrollController;
+
+  /// Whether this page is the one the pager is resting on.
+  ///
+  /// Off screen the page keeps its state but stops following the session, so a
+  /// snapshot folding into another page does not rebuild it every frame.
+  final bool isActive;
 
   @override
   State<ClientSettingsView> createState() => _ClientSettingsViewState();
@@ -83,9 +91,10 @@ class _ClientSettingsViewState extends State<ClientSettingsView> {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    return ActiveListenableBuilder(
+      active: widget.isActive,
       listenable: widget.session,
-      builder: (context, _) {
+      builder: (context) {
         final session = widget.session;
         final settings = session.settings;
 
@@ -456,7 +465,7 @@ class _AboutPage extends StatelessWidget {
       child: ScalingLazyColumn(
         topSpacer: 45,
         padding: const EdgeInsets.only(bottom: 25),
-        itemCount: 4,
+        itemCount: 5,
         itemSpacing: WearTokens.itemSpacing,
         itemBuilder: (context, index, centerDistance) {
           if (index == 0) {
@@ -496,6 +505,21 @@ class _AboutPage extends StatelessWidget {
           }
           if (index == 2) {
             return _row(context, Icons.person_outline_rounded, '制作者', '真不玩喷');
+          }
+          if (index == 3) {
+            /*
+             * The source is public, so the address belongs on the about page.
+             * Shown as text rather than a tappable link: opening a URL needs a
+             * platform channel and a dependency this app has no other use for,
+             * and a watch has no address bar to paste into anyway — the value
+             * is being able to find it.
+             */
+            return _row(
+              context,
+              Icons.code_rounded,
+              '开源地址',
+              'github.com/w600518/wear-harness',
+            );
           }
           return _row(
             context,

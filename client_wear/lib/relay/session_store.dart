@@ -415,6 +415,8 @@ class SessionStore {
     _oldestSeq = 0;
     _streamText = '';
     _streamReasoning = '';
+    _pendingRecords.clear();
+    _pendingCursor = 0;
 
     final cursor = payload['cursor'];
     if (cursor is int) {
@@ -428,18 +430,68 @@ class SessionStore {
 
     final records = payload['records'];
     if (records is List) {
-      for (final record in records) {
-        final event = _eventOf(record);
-        if (event != null) {
-          _applyEvent(event, fromHistory: true);
-        }
-      }
+      _pendingRecords.addAll(records);
     }
 
     final projections = payload['projections'];
     if (projections is Map<String, dynamic>) {
       _applyProjections(projections);
     }
+
+    /*
+     * Nothing is folded here. The caller drives every slice — see
+     * [foldSnapshotSlice] — so the frame this snapshot arrives on stays cheap:
+     * folding even one slice inside the message handler put a spike on the
+     * exact frame the mask appears, which is the stutter that shows up as the
+     * mask briefly freezing before it starts to fill.
+     */
+    if (_pendingRecords.isEmpty) {
+      _finishSnapshotFold();
+    }
+  }
+
+  /// Records from the opening snapshot that have not been folded in yet.
+  ///
+  /// A snapshot carries the whole conversation. Folding it in a single pass
+  /// blocks the frame the mask lifts on, which is what turned opening a long
+  /// session into a pause followed by the whole transcript appearing at once.
+  final List<dynamic> _pendingRecords = <dynamic>[];
+  int _pendingCursor = 0;
+
+  /// True while snapshot records are still waiting to be folded.
+  bool get isFoldingSnapshot => _pendingCursor < _pendingRecords.length;
+
+  /// Folds the next slice of snapshot records into the transcript.
+  ///
+  /// One record per call by default: the transcript is meant to grow visibly
+  /// under the loading mask, a message at a time, so the page arrives already
+  /// rendered rather than appearing in a lump when the mask lifts. Returns true
+  /// when more remain, so the caller can schedule another frame rather than
+  /// driving the whole history through in one loop. A cursor is used rather
+  /// than removing from the front, which would make this O(n²) on a long
+  /// conversation.
+  bool foldSnapshotSlice({int max = 8}) {
+    var folded = 0;
+    while (_pendingCursor < _pendingRecords.length && folded < max) {
+      final record = _pendingRecords[_pendingCursor++];
+      folded++;
+      final event = _eventOf(record);
+      if (event != null) {
+        _applyEvent(event, fromHistory: true);
+      }
+    }
+
+    if (_pendingCursor >= _pendingRecords.length) {
+      _finishSnapshotFold();
+      return false;
+    }
+    return true;
+  }
+
+  /// Closes out a snapshot once every record has been folded.
+  void _finishSnapshotFold() {
+    _pendingRecords.clear();
+    _pendingCursor = 0;
 
     /* Anything still marked streaming came from history, so it is settled. */
     _closeStreaming();
@@ -739,8 +791,17 @@ class SessionStore {
         if (value is Map<String, dynamic>) {
           goal = value;
           goalSessionId = _openSession;
-          final text = value['objective'] ?? value['title'];
-          goalLabel = text is String ? text : null;
+          /*
+           * The projection nests the goal's own fields one level down:
+           * `{goal: {id, revision, objective, phase, …}, roundsStarted, …}`.
+           * Reading `objective` off the top level found nothing and left the
+           * label empty, so the goal card read 暂无 even with a goal running.
+           */
+          final body = value['goal'];
+          final text = body is Map<String, dynamic>
+              ? body['objective']
+              : value['objective'];
+          goalLabel = text is String && text.isNotEmpty ? text : null;
         } else if (value == null) {
           goal = null;
           goalSessionId = null;

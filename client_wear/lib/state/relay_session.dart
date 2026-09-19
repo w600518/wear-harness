@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../relay/relay_client.dart';
@@ -263,6 +264,23 @@ class RelaySession extends ChangeNotifier {
       final before = _modelIdentity();
       final wasRunning = store.turnRunning;
       store.applyMessage(message);
+
+      /*
+       * A snapshot brings the whole conversation with it. Fold the first slice
+       * now; the rest follows one slice per frame, so the transcript builds up
+       * under the mask instead of landing in one stalled pass.
+       */
+      if (store.isFoldingSnapshot) {
+        /*
+         * Once per opening, not once per message. The folding window stays open
+         * across every message that arrives while the history is being folded.
+         */
+        _hadSnapshot = true;
+        _pumpSnapshot();
+      } else if (store.hasSnapshot && !_hadSnapshot) {
+        _hadSnapshot = true;
+        _holdShieldForLayout();
+      }
       final after = _modelIdentity();
       if (after != before) {
         unawaited(refreshModelCapabilities());
@@ -475,6 +493,15 @@ class RelaySession extends ChangeNotifier {
       return;
     }
 
+    _applyCatalog(catalog);
+  }
+
+  /// Folds a model catalog into the reasoning control's state.
+  ///
+  /// Split out of [refreshModelCapabilities] because the catalog now arrives
+  /// two ways: on its own, and packed into the bundle the relay answers when a
+  /// conversation is opened.
+  void _applyCatalog(Map<String, dynamic> catalog) {
     final selection = store.modelSelection;
     final fromSelection = selection?['model'];
     Object? model = fromSelection;
@@ -518,6 +545,49 @@ class RelaySession extends ChangeNotifier {
 
     reasoningEfforts = List<Map<String, dynamic>>.unmodifiable(listed);
     notifyListeners();
+  }
+
+  /// One round trip for everything opening a conversation needs.
+  ///
+  /// Called once, when a conversation is tapped. The model catalog used to be a
+  /// request of its own fired straight after the subscribe, and each reply
+  /// rebuilt the page separately; the relay now answers the opening state in
+  /// one message, so the composer settles after a single round trip. Only the
+  /// catalog is asked for — the session list is already held, and the balance
+  /// belongs to the config page — which keeps the reply small rather than
+  /// shipping state this page has no use for.
+  Future<void> _refreshOpenBundle() async {
+    final client = _client;
+    if (client == null) {
+      return;
+    }
+    try {
+      final bundle = await client.request(
+        'relay/bundle',
+        device: activeDevice,
+        payload: const <String, dynamic>{
+          'sessions': false,
+          'catalog': true,
+          'balance': false,
+        },
+      );
+      if (bundle.isEmpty) {
+        return;
+      }
+      final catalog = bundle['catalog'];
+      if (catalog is Map<String, dynamic>) {
+        _applyCatalog(catalog);
+      }
+      final errors = bundle['errors'];
+      if (errors is Map<String, dynamic> && errors.containsKey('catalog')) {
+        /* The session still opens; only the reasoning control goes without. */
+        _lastError = 'relay/catalog: ${errors['catalog']}';
+        notifyListeners();
+      }
+    } on RelayException catch (error) {
+      _lastError = '${error.code}: ${error.message}';
+      notifyListeners();
+    }
   }
 
   /// Switches the reasoning effort of the session's current model.
@@ -845,6 +915,8 @@ class RelaySession extends ChangeNotifier {
     _snapshotTimer?.cancel();
     _subscribeTimer?.cancel();
     _stopHeartbeat();
+    /* A shield held for a layout that is no longer coming would never lift. */
+    _shieldHeld = false;
 
     await _messageSubscription?.cancel();
     _messageSubscription = null;
@@ -879,6 +951,9 @@ class RelaySession extends ChangeNotifier {
     }
 
     store.openSession(sessionId);
+    /* Each conversation gets its own snapshot moment to wait for. */
+    _hadSnapshot = false;
+    _shieldHeld = false;
     _armSnapshotDeadline();
     notifyListeners();
     await _subscribeTo(sessionId);
@@ -894,9 +969,10 @@ class RelaySession extends ChangeNotifier {
     /*
      * The model's capabilities belong to the session that just opened: which
      * reasoning efforts exist is a property of the selected model, so it has to
-     * be re-read rather than carried over from the previous session.
+     * be re-read rather than carried over from the previous session. It comes
+     * back on the opening bundle, so this is one round trip rather than two.
      */
-    await refreshModelCapabilities();
+    await _refreshOpenBundle();
   }
 
   Timer? _subscribeTimer;
@@ -928,6 +1004,22 @@ class RelaySession extends ChangeNotifier {
       await client.subscribe(sessionId, device: activeDevice);
       _subscribing = false;
       if (store.openSessionId == sessionId) {
+        /*
+         * The wait for the snapshot starts here, not when the session was
+         * opened.
+         *
+         * A subscribe that took a few seconds — or went through retries while
+         * the sender's mux was still coming up — had already spent the window,
+         * so the shield dropped the instant the stream opened and the page sat
+         * on "这个会话还没有消息" until the records landed: the few seconds of
+         * nothing between the mask disappearing and the conversation appearing.
+         * Re-arming measures the wait that actually matters, from an open
+         * stream to its first snapshot, and stays bounded because the deadline
+         * re-subscribes when it lapses.
+         */
+        if (!store.hasSnapshot) {
+          _armSnapshotDeadline();
+        }
         /* The refusal never reached dsh, so nothing else would clear it. */
         _lastError = null;
         notifyListeners();
@@ -969,15 +1061,100 @@ class RelaySession extends ChangeNotifier {
   /// conversation, and the retry itself is proof that more is on the way.
   bool get isLoadingSession =>
       store.openSessionId != null &&
-      !store.hasSnapshot &&
-      (_subscribing ||
-          DateTime.now().difference(_sessionOpenedAt) < _snapshotDeadline);
+      (_shieldHeld ||
+          store.isFoldingSnapshot ||
+          (!store.hasSnapshot &&
+              (_subscribing ||
+                  DateTime.now().difference(_sessionOpenedAt) <
+                      _snapshotDeadline)));
+
+  /// True while the snapshot is being folded into the transcript, one slice
+  /// per frame.
+  bool _pumpingSnapshot = false;
+
+  /// Folds the rest of the opening snapshot in, a slice at a time.
+  ///
+  /// The transcript is grown under the loading mask rather than in one stalled
+  /// pass: each frame folds a slice, the list below rebuilds around it, and the
+  /// mask only comes off once the last slice is in. That is what makes opening
+  /// a long conversation show a mask over records that are already rendered,
+  /// instead of a pause followed by everything appearing at once.
+  void _pumpSnapshot() {
+    if (_pumpingSnapshot || _disposed) {
+      return;
+    }
+    _pumpingSnapshot = true;
+
+    void step() {
+      if (_disposed) {
+        _pumpingSnapshot = false;
+        return;
+      }
+      final more = store.foldSnapshotSlice();
+      notifyListeners();
+      if (!more) {
+        _pumpingSnapshot = false;
+        /* Everything is in. Hold the mask for the layout the last slice needs,
+         * then let it go. */
+        _holdShieldForLayout();
+        return;
+      }
+
+      /*
+       * The next slice waits for this frame to finish — not merely for its
+       * callbacks, which run before the frame is done. `endOfFrame` completes
+       * once the slice just folded has been built, laid out and painted, so the
+       * records are rendered before the next batch is folded in. It also makes
+       * sure a frame is actually scheduled, so the pump cannot stall waiting on
+       * one that nobody asked for.
+       */
+      SchedulerBinding.instance.endOfFrame.then((_) => step());
+    }
+
+    step();
+  }
+
+  /// True while the transcript is being built behind the shield.
+  bool _shieldHeld = false;
+
+  /// Whether the open session has reported its snapshot yet, so the moment it
+  /// arrives can be noticed exactly once.
+  bool _hadSnapshot = false;
 
   static const Duration _snapshotDeadline = Duration(seconds: 8);
 
   DateTime _sessionOpenedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   Timer? _snapshotTimer;
+
+  /// Keeps the shield up for a couple of frames after the snapshot lands.
+  ///
+  /// The records are folded synchronously, so by the time the store reports a
+  /// snapshot the transcript has everything it needs — but the list below is
+  /// still empty as far as the frame is concerned: it has to be built and
+  /// measured for the first time before it can be drawn. Dropping the shield on
+  /// that same frame revealed the work instead of the result, so the page went
+  /// from the mask straight to an empty conversation and filled in a moment
+  /// later. Holding it for two frames lets the records load and lay out behind
+  /// the mask, and what the mask uncovers is already drawn.
+  void _holdShieldForLayout({int frames = 2}) {
+    _shieldHeld = true;
+    void tick(int remaining) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_disposed) {
+          return;
+        }
+        if (remaining > 0) {
+          tick(remaining - 1);
+          return;
+        }
+        _shieldHeld = false;
+        notifyListeners();
+      });
+    }
+
+    tick(frames);
+  }
 
   /// Arms the deadline for an opening snapshot.
   ///
@@ -1254,36 +1431,58 @@ class RelaySession extends ChangeNotifier {
   /// Ownership is checked, not just presence: a goal reported for a session the
   /// user has since left must not appear under the new one.
   bool get hasGoal =>
-      store.goal != null && store.goalSessionId == store.openSessionId;
+      _goalBody != null && store.goalSessionId == store.openSessionId;
+
+  /// The goal's own fields.
+  ///
+  /// The `goal` projection nests them one level down — the value is
+  /// `{goal: {id, revision, objective, phase, …}, roundsStarted, createdAt,
+  /// updatedAt}` — while the `goal/changed` event carries a flat view. Reading
+  /// the projection's fields off the top level found nothing, so the phase and
+  /// the objective were permanently absent, the mutation reference could never
+  /// be built, and every goal action returned without doing anything.
+  Map<String, dynamic>? get _goalBody {
+    final body = store.goal?['goal'];
+    return body is Map<String, dynamic> ? body : null;
+  }
 
   /// The goal's phase: active, paused, blocked or complete.
   String? get goalPhase {
-    if (!hasGoal) {
-      return null;
-    }
-    final phase = store.goal?['phase'];
+    final phase = _goalBody?['phase'];
     return phase is String ? phase : null;
   }
 
   /// The goal's objective, as the user wrote it.
   String? get goalObjective {
-    if (!hasGoal) {
-      return null;
+    final text = _goalBody?['objective'];
+    if (text is String && text.isNotEmpty) {
+      return text;
     }
-    final text = store.goal?['objective'];
-    return text is String && text.isNotEmpty ? text : store.goalLabel;
+    return store.goalLabel;
   }
 
   /// The `{id, revision}` every goal mutation is keyed by.
+  ///
+  /// Assembled from the projection's own fields rather than looked up as a
+  /// nested `ref`: the projection carries `id` and `revision` flat inside its
+  /// `goal` object, and only the event view has a `ref`.
   Map<String, dynamic>? get _goalRef {
-    if (!hasGoal) {
+    final body = _goalBody;
+    final id = body?['id'];
+    final revision = body?['revision'];
+    if (id is! String || id.isEmpty || revision is! int) {
       return null;
     }
-    final ref = store.goal?['ref'];
-    return ref is Map<String, dynamic> ? ref : null;
+    return <String, dynamic>{'id': id, 'revision': revision};
   }
 
   /// Runs one goal mutation, keeping the caller free of the ref plumbing.
+  ///
+  /// The agent field is `agentId`, not `agent`: dsh's descriptor for these
+  /// endpoints declares `wire: 'agentId'` for the agent lookup, and a call
+  /// carrying `agent` instead is refused outright — "missing \"agentId\"" —
+  /// which is why every goal button did nothing. `session/prompt` names the
+  /// same thing `agent`, so the two are not interchangeable.
   Future<void> _goalCall(String method, {Map<String, dynamic>? body}) async {
     final client = _client;
     final sessionId = store.openSessionId;
@@ -1294,7 +1493,35 @@ class RelaySession extends ChangeNotifier {
     try {
       await client.request(
         method,
-        payload: {'agent': sessionId, 'ref': ref, ...?body},
+        payload: {'agentId': sessionId, 'ref': ref, ...?body},
+        device: activeDevice,
+      );
+      notifyListeners();
+    } on RelayException catch (error) {
+      _lastError = '${error.code}: ${error.message}';
+      notifyListeners();
+    }
+  }
+
+  /// Starts a goal for the open session.
+  ///
+  /// The one goal operation that does not need a reference, because it is what
+  /// produces the first revision. Without it the goal page was unreachable for
+  /// any session that had none: the card only opened when a goal already
+  /// existed, so a goal could never be created from the watch at all.
+  Future<void> createGoal(String objective) async {
+    final client = _client;
+    final sessionId = store.openSessionId;
+    if (client == null || sessionId == null || objective.trim().isEmpty) {
+      return;
+    }
+    try {
+      await client.request(
+        'goals/create',
+        payload: <String, dynamic>{
+          'agentId': sessionId,
+          'request': <String, dynamic>{'objective': objective.trim()},
+        },
         device: activeDevice,
       );
       notifyListeners();
