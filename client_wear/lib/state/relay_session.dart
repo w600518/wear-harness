@@ -473,12 +473,13 @@ class RelaySession extends ChangeNotifier {
         : <Map<String, dynamic>>[];
 
     /*
-     * dsh returns efforts in whatever order the adapter declares. The useful
-     * order on a watch is by strength — Low, High, Max — with turning reasoning
-     * off last, since that is the odd one out rather than another level.
+     * dsh returns efforts in whatever order the adapter declares. The watch
+     * shows one ladder — Off, Low, High, Max — so the order is normalised
+     * rather than inherited: Off belongs at the left end, where it reads as
+     * the bottom of the same scale instead of an afterthought behind Max.
      * Anything unrecognised keeps its host order, after the known ids.
      */
-    const strength = <String>['low', 'high', 'max', 'off'];
+    const strength = <String>['off', 'low', 'medium', 'high', 'max'];
     listed.sort((a, b) {
       final left = strength.indexOf('${a['id']}');
       final right = strength.indexOf('${b['id']}');

@@ -180,10 +180,12 @@ class _MainPagerState extends State<MainPager> {
     _refreshJumpControl();
   }
 
-  /// The levels in fixed slots, with a gap where this model dropped Off.
+  /// The levels in fixed slots, with Off's slot kept when a model lacks it.
   ///
-  /// Every model that takes a reasoning setting ends up with the same number
-  /// of slots, so the levels line up whatever subset it offers.
+  /// Off is the one level a model may or may not offer, and it sits at the left
+  /// end of the ladder. Without the placeholder the other three would slide
+  /// left into its space, so the same setting would look like a different
+  /// control on a model that simply has no Off.
   static List<Map<String, dynamic>?> _reasoningSlots(
     List<Map<String, dynamic>> efforts,
   ) {

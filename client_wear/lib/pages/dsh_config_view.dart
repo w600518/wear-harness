@@ -733,6 +733,23 @@ class _ModelPickerState extends State<_ModelPicker> {
   /// page's workspaces are.
   final Set<String> _expanded = <String>{};
 
+  /*
+   * Owned by the state rather than built in build().
+   *
+   * The column swaps its whole ScrollPosition whenever the controller identity
+   * changes, so a controller created per build reset the scroll on every
+   * expand/collapse: expanding a provider rebuilt the list, threw away the
+   * position, and left the old and new lists on screen in the same frame —
+   * two "选择模型" headings with a gap between them.
+   */
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
   void _toggle(String provider) {
     setState(() {
       if (!_expanded.remove(provider)) {
@@ -850,7 +867,6 @@ class _ModelPickerState extends State<_ModelPicker> {
 
   @override
   Widget build(BuildContext context) {
-    final scroll = ScrollController();
     final groups = _providerGroups();
     final current = widget.session.store.modelSelection;
     final currentId = current == null ? null : '${current['model']}';
@@ -866,10 +882,10 @@ class _ModelPickerState extends State<_ModelPicker> {
     }
 
     return WearScaffold(
-      timeTextController: scroll,
-      overlays: <Widget>[PositionIndicator(controller: scroll)],
+      timeTextController: _scroll,
+      overlays: <Widget>[PositionIndicator(controller: _scroll)],
       child: ScalingLazyColumn(
-        controller: scroll,
+        controller: _scroll,
         topSpacer: 45,
         padding: const EdgeInsets.only(bottom: 25),
         itemCount: rows.length + 1,
