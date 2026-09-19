@@ -621,6 +621,20 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
   /// The entry currently being sent, so its row can show progress.
   String? _sending;
 
+  /// Groups the user has collapsed, by key.
+  ///
+  /// Both start open. The page exists to show what is waiting, and a list that
+  /// opened collapsed would hide the only thing it has to say.
+  final Set<String> _collapsed = <String>{};
+
+  void _toggleGroup(String key) {
+    setState(() {
+      if (!_collapsed.remove(key)) {
+        _collapsed.add(key);
+      }
+    });
+  }
+
   Future<void> _edit(Map<String, dynamic> entry) async {
     final id = '${entry['id']}';
     final controller = TextEditingController(
@@ -677,16 +691,16 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
         }
 
         /*
-         * Two groups in one flat list of rows rather than a header per nested
-         * list: the whole page is a handful of rows on a watch face, and a flat
-         * run keeps one scroll position for the page instead of two that would
-         * fight over the overlay indicator.
+         * Two collapsible groups in one flat list of rows, headed the way the
+         * session page heads a working directory: the same card, leading icon,
+         * count and disclosure. A flat run keeps one scroll position for the
+         * page instead of two that would fight over the overlay indicator.
          */
         final rows = <Widget>[
-          if (pending.isNotEmpty) _groupHeader('排队中'),
-          ...pending.map((entry) => _row(entry, steerable: true)),
-          if (steering.isNotEmpty) _groupHeader('待插话'),
-          ...steering.map((entry) => _row(entry, steerable: false)),
+          ..._group('排队中', 'pending', Icons.schedule_rounded, pending,
+              steerable: true),
+          ..._group('待插话', 'steering', Icons.bolt_rounded, steering,
+              steerable: false),
         ];
 
         /*
@@ -711,23 +725,85 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
     );
   }
 
-  /// A heading over one queue group.
-  ///
-  /// It is an ordinary list row, not a sticky header: the groups are short and
-  /// a heading that scrolls away with its rows still reads as theirs.
-  Widget _groupHeader(String label) {
-    final text = Theme.of(context).textTheme;
+  /// One group: its heading, then its rows while it is open.
+  List<Widget> _group(
+    String label,
+    String key,
+    IconData icon,
+    List<Map<String, dynamic>> entries, {
+    required bool steerable,
+  }) {
+    if (entries.isEmpty) {
+      return const <Widget>[];
+    }
+    final open = !_collapsed.contains(key);
+    return <Widget>[
+      _groupHeader(
+        label,
+        icon,
+        entries.length,
+        open: open,
+        onTap: () => _toggleGroup(key),
+      ),
+      if (open)
+        ...entries.map((entry) => _row(entry, steerable: steerable)),
+    ];
+  }
+
+  /// A heading over one queue group, shaped like the session page's working
+  /// directory heading: leading icon, label, count, and a disclosure arrow.
+  Widget _groupHeader(
+    String label,
+    IconData icon,
+    int count, {
+    required bool open,
+    required VoidCallback onTap,
+  }) {
     final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
 
     return Padding(
+      /*
+       * The list carries only vertical padding, so the heading brings the same
+       * horizontal inset its rows do; without it the card would touch the
+       * bezel while every row under it stood off.
+       */
       padding: const EdgeInsets.only(
         left: WearTokens.space3,
         right: WearTokens.space3,
-        bottom: WearTokens.space1,
+        top: 2,
+        bottom: 2,
       ),
-      child: Text(
-        label,
-        style: text.labelMedium!.copyWith(color: colors.onSurfaceVariant),
+      child: WearCard(
+        padding: const EdgeInsets.symmetric(
+          horizontal: WearTokens.space3,
+          vertical: WearTokens.space1,
+        ),
+        onTap: onTap,
+        semanticLabel:
+            '$label，$count 条，'
+            '${open ? '已展开，点按收起' : '点按展开'}',
+        child: Row(
+          children: <Widget>[
+            Icon(icon, size: 16, color: colors.primary),
+            const SizedBox(width: WearTokens.space2),
+            Expanded(
+              child: Text(
+                label,
+                style: text.labelLarge,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text('$count', style: text.labelSmall),
+            const SizedBox(width: WearTokens.space1),
+            Icon(
+              open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+              size: 18,
+              color: colors.primary,
+            ),
+          ],
+        ),
       ),
     );
   }
