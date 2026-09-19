@@ -180,26 +180,11 @@ class _MainPagerState extends State<MainPager> {
     _refreshJumpControl();
   }
 
-  /// The levels in fixed slots, with Off's slot kept when a model lacks it.
-  ///
-  /// Off is the one level a model may or may not offer, and it sits at the left
-  /// end of the ladder. Without the placeholder the other three would slide
-  /// left into its space, so the same setting would look like a different
-  /// control on a model that simply has no Off.
-  static List<Map<String, dynamic>?> _reasoningSlots(
-    List<Map<String, dynamic>> efforts,
-  ) {
-    final slots = efforts
-        .map<Map<String, dynamic>?>((effort) => effort)
-        .toList();
-    if (efforts.isEmpty ||
-        efforts.any((effort) => '${effort['id']}' == 'off')) {
-      return slots;
-    }
-    return <Map<String, dynamic>?>[null, ...slots];
-  }
-
   /// Offers the reasoning efforts the session's model accepts.
+  ///
+  /// Whatever levels the model declares are shown centred as one group: a model
+  /// without Off simply has one pill fewer, and the row re-centres instead of
+  /// holding an empty slot open for a level it does not offer.
   Future<void> _pickReasoning() async {
     final session = widget.session;
     final efforts = session.reasoningEfforts;
@@ -218,27 +203,14 @@ class _MainPagerState extends State<MainPager> {
           WearTokens.space2,
           WearTokens.space4,
         ),
-        child: Row(
+        child: WearChipRow(
+          alignment: WrapAlignment.center,
           children: <Widget>[
-            /*
-             * Fixed slots rather than a re-centred wrap: a model that drops the
-             * Off level keeps the slot it would have occupied, so the levels it
-             * does have never shift sideways. Re-centring three pills where
-             * four used to sit reads as a different control rather than the
-             * same one missing a level.
-             */
-            for (final effort in _reasoningSlots(efforts))
-              Expanded(
-                child: effort == null
-                    ? const SizedBox.shrink()
-                    : Center(
-                        child: WearChip(
-                          label: session.reasoningLabel(effort),
-                          selected: effort['id'] == current,
-                          onTap: () =>
-                              Navigator.of(sheetContext).pop('${effort['id']}'),
-                        ),
-                      ),
+            for (final effort in efforts)
+              WearChip(
+                label: session.reasoningLabel(effort),
+                selected: effort['id'] == current,
+                onTap: () => Navigator.of(sheetContext).pop('${effort['id']}'),
               ),
           ],
         ),
