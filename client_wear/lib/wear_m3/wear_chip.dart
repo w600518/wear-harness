@@ -16,6 +16,7 @@ class WearChip extends StatelessWidget {
     this.enabled = true,
     this.onTap,
     this.semanticLabel,
+    this.dense = false,
   });
 
   final String label;
@@ -28,6 +29,13 @@ class WearChip extends StatelessWidget {
   final bool enabled;
   final VoidCallback? onTap;
   final String? semanticLabel;
+
+  /// Trims the horizontal padding.
+  ///
+  /// On a 233dp panel four pills at the normal padding plus their gaps come to
+  /// more than a row, so a set that has to sit on one line — the reasoning
+  /// levels — uses this. The 48dp minimum touch target is unaffected.
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
@@ -69,8 +77,8 @@ class WearChip extends StatelessWidget {
                 minWidth: WearTokens.touchTarget,
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: WearTokens.space3,
+                padding: EdgeInsets.symmetric(
+                  horizontal: dense ? WearTokens.space2 : WearTokens.space3,
                   vertical: WearTokens.space1,
                 ),
                 child: Row(

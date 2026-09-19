@@ -205,9 +205,16 @@ class _MainPagerState extends State<MainPager> {
         ),
         child: WearChipRow(
           alignment: WrapAlignment.center,
+          /*
+           * Tight gaps and dense pills so a full ladder — four levels on this
+           * panel — stays on one centred row instead of wrapping the last
+           * level onto a line of its own.
+           */
+          spacing: WearTokens.space1,
           children: <Widget>[
             for (final effort in efforts)
               WearChip(
+                dense: true,
                 label: session.reasoningLabel(effort),
                 selected: effort['id'] == current,
                 onTap: () => Navigator.of(sheetContext).pop('${effort['id']}'),
