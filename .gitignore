@@ -1,6 +1,7 @@
 # Build output, both sides.
 build/
 client_wear/build/
+client_phone/build/
 
 # Dart/Flutter caches.
 .dart_tool/
