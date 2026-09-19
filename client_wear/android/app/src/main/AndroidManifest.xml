@@ -5,6 +5,10 @@
     <!-- The relay socket in stage 2 needs network access. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The rotary crown's tick. Without this the vibrate calls are dropped
+         silently, which reads on the wrist as the crown having stopped working. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <application
         android:label="client_wear"
         android:name="${applicationName}"

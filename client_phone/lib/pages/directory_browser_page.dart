@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../state/relay_session.dart';
+import '../state/rotary_scroll.dart';
 import '../wear_m3/wear_m3.dart';
 
 /// Picks a directory on the host and registers it as a workspace.
@@ -39,11 +40,15 @@ class _DirectoryBrowserPageState extends State<DirectoryBrowserPage> {
   @override
   void initState() {
     super.initState();
+    /* This page covers the pager, so it takes the crown while it is up; closing
+     * it uncovers the pager's own claim. */
+    RotaryScroll.claim(_scroll);
     unawaited(_load());
   }
 
   @override
   void dispose() {
+    RotaryScroll.release(_scroll);
     _scroll.dispose();
     _path.dispose();
     super.dispose();

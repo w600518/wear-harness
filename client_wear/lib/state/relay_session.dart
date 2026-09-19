@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../relay/relay_client.dart';
 import '../relay/session_store.dart';
+import 'rotary_scroll.dart';
 
 /*
  * Pages hold a RelaySession, not a RelayClient, so the status and error types a
@@ -23,6 +24,7 @@ class SettingsStore extends ChangeNotifier {
   static const String _kPort = 'relay.port';
   static const String _kPassphrase = 'relay.passphrase';
   static const String _kDeviceName = 'relay.deviceName';
+  static const String _kCrownVibrate = 'watch.crownVibrate';
 
   /*
    * Empty on purpose: nothing here is a deployment fact the app could know.
@@ -35,6 +37,16 @@ class SettingsStore extends ChangeNotifier {
   int _port = 0;
   String _passphrase = '';
   String _deviceName = '';
+
+  /*
+   * The crown's tick, on by default.
+   *
+   * The tick is the point of driving the crown by hand — a watch that did
+   * nothing under the thumb reads as broken — but it is a preference rather
+   * than a fact about the deployment, so it is kept here with the rest and
+   * handed to the platform as it changes.
+   */
+  bool _crownVibrate = true;
 
   /// True once [load] has finished, successfully or not.
   bool get isLoaded => _loaded;
@@ -51,6 +63,7 @@ class SettingsStore extends ChangeNotifier {
       _port = prefs.getInt(_kPort) ?? _port;
       _passphrase = prefs.getString(_kPassphrase) ?? _passphrase;
       _deviceName = prefs.getString(_kDeviceName) ?? _deviceName;
+      _crownVibrate = prefs.getBool(_kCrownVibrate) ?? _crownVibrate;
     } on Object {
       /* Fall through to the defaults already in the fields. */
     }
@@ -65,6 +78,7 @@ class SettingsStore extends ChangeNotifier {
       await prefs.setInt(_kPort, _port);
       await prefs.setString(_kPassphrase, _passphrase);
       await prefs.setString(_kDeviceName, _deviceName);
+      await prefs.setBool(_kCrownVibrate, _crownVibrate);
     } on Object {
       /* Best effort: the in-memory value still applies for this session. */
     }
@@ -74,6 +88,20 @@ class SettingsStore extends ChangeNotifier {
   int get port => _port;
   String get passphrase => _passphrase;
   String get deviceName => _deviceName;
+
+  /// Whether the crown should tick under the finger.
+  bool get crownVibrate => _crownVibrate;
+
+  set crownVibrate(bool value) {
+    if (_crownVibrate == value) {
+      return;
+    }
+    _crownVibrate = value;
+    /* Handed over as it changes, so the very next turn already obeys it. */
+    unawaited(RotaryScroll.setVibrate(value));
+    notifyListeners();
+    unawaited(_persist());
+  }
 
   set host(String value) {
     _host = value.trim();
@@ -1285,8 +1313,12 @@ class RelaySession extends ChangeNotifier {
   /// `steering` row has already been accepted into the next-step inbox of the
   /// turn that is running. The third value, `context`, marks a system
   /// injection — nobody wrote it and no row action applies to it, so it is
-  /// left out, which is also what the web client's queue dock does. A row
-  /// without the field predates it and is read as queued.
+  /// left out, which is also what the web client's queue dock does.
+  ///
+  /// `placement` is not the whole test: the next-turn inbox labels its rows
+  /// `queued` whatever wrote them, so the harness's own notices reach here
+  /// looking like the user's messages. See [_queueRows] for the field that
+  /// separates them.
   List<Map<String, dynamic>> get queuedPending => _queueRows('queued');
 
   /// Interjections already sent but not yet read by the model.
@@ -1300,8 +1332,23 @@ class RelaySession extends ChangeNotifier {
   bool get hasQueuedRows =>
       queuedPending.isNotEmpty || queuedSteering.isNotEmpty;
 
+  /// The queue rows of one placement that a person actually wrote.
+  ///
+  /// `placement` alone does not answer that. dsh labels every row on the
+  /// next-turn inbox `queued` regardless of who put it there, so a notice the
+  /// harness wrote for itself — a job finishing, a plugin speaking — arrived
+  /// looking exactly like a message the user had queued. It then appeared in the
+  /// interjection list as something to edit, steer or drop, which none of it was.
+  ///
+  /// `rpcId` is the field that separates them: dsh attaches it only when the
+  /// message's source is a human submission, so a row without one was not typed
+  /// by anyone and has no business in a list of the user's own pending messages.
   List<Map<String, dynamic>> _queueRows(String placement) => store.queuedItems
-      .where((row) => (row['placement'] as String? ?? 'queued') == placement)
+      .where(
+        (row) =>
+            (row['placement'] as String? ?? 'queued') == placement &&
+            row['rpcId'] is String,
+      )
       .toList(growable: false);
 
   /// Text of one queued item.

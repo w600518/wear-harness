@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'pages/main_pager.dart';
 import 'state/relay_session.dart';
+import 'state/rotary_scroll.dart';
 import 'wear_m3/wear_m3.dart';
 
 void main() async {
@@ -15,12 +16,22 @@ void main() async {
    */
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
+  /* Wired before the first frame, so a turn during startup is not dropped. */
+  RotaryScroll.attach();
+
   /*
    * Settings are read before the first frame so the very first render already
    * shows the saved relay address instead of the built-in default.
    */
   final settings = SettingsStore();
   await settings.load();
+
+  /*
+   * The crown's switch is handed over as soon as it is known, for the same
+   * reason: a watch that was left with ticking off must not tick once on the
+   * way in.
+   */
+  await RotaryScroll.setVibrate(settings.crownVibrate);
 
   runApp(DshRelayApp(settings: settings));
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../state/relay_session.dart';
+import '../state/rotary_scroll.dart';
 import '../wear_m3/wear_m3.dart';
 import 'client_settings_view.dart';
 import 'compose_view.dart';
@@ -78,6 +79,13 @@ class _MainPagerState extends State<MainPager> {
     _pages.addListener(_handlePagerScroll);
     widget.session.addListener(_refreshJumpControl);
     _homeScroll.addListener(_handleHomeScroll);
+    /*
+     * The crown drives whichever card is on screen. Claimed here for the card
+     * the app opens on, and re-claimed when the pager settles on another; the
+     * four controllers live on this state, so this is the one place that knows
+     * which of them is the visible one.
+     */
+    RotaryScroll.claim(_activeScroll);
     /* Reconnect on open when the watch is already configured, so a glance at
      * the composer is enough to see whether the relay is up. */
     if (widget.session.settings.isComplete &&
@@ -316,6 +324,13 @@ class _MainPagerState extends State<MainPager> {
     _reasoningSlot.dispose();
     _pages.dispose();
     _onComposer.dispose();
+    /* Every controller this state owns gives the crown back, not only the one in
+     * front: the claim is keyed by identity, and a stale one would point the
+     * crown at a disposed position. */
+    RotaryScroll.release(_sessionScroll);
+    RotaryScroll.release(_homeScroll);
+    RotaryScroll.release(_configScroll);
+    RotaryScroll.release(_settingsScroll);
     _sessionScroll.dispose();
     _homeScroll.dispose();
     _configScroll.dispose();
@@ -481,6 +496,8 @@ class _MainPagerState extends State<MainPager> {
         controller: _pages,
         onPageChanged: (index) {
           setState(() => _index = index);
+          /* Hand the crown to the card that just settled. */
+          RotaryScroll.claim(_activeScroll);
           /* Belt and braces: the scroll listener drives the flag throughout a
            * swipe, and settling on a page confirms it. */
           _onComposer.value = index == _homeIndex;
@@ -621,11 +638,34 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
   /// The entry currently being sent, so its row can show progress.
   String? _sending;
 
+  /*
+   * Owned by the state, not the build. It was created inside `build`, which
+   * leaked a controller per frame and left the list with a fresh position each
+   * time — nothing noticed while the page was only ever touched by finger, but
+   * the crown addresses the controller by identity and a new one every frame
+   * would have had nowhere to keep its offset.
+   */
+  final ScrollController _scroll = ScrollController();
+
   /// Groups the user has collapsed, by key.
   ///
   /// Both start open. The page exists to show what is waiting, and a list that
   /// opened collapsed would hide the only thing it has to say.
   final Set<String> _collapsed = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    /* Pushed over the pager, so it holds the crown until it closes. */
+    RotaryScroll.claim(_scroll);
+  }
+
+  @override
+  void dispose() {
+    RotaryScroll.release(_scroll);
+    _scroll.dispose();
+    super.dispose();
+  }
 
   void _toggleGroup(String key) {
     setState(() {
@@ -663,7 +703,6 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final scroll = ScrollController();
     final text = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
 
@@ -713,9 +752,9 @@ class _InterjectionsPageState extends State<_InterjectionsPage> {
          * looked dead. A short fixed list does not need the scaling treatment.
          */
         return WearScaffold(
-          overlays: <Widget>[PositionIndicator(controller: scroll)],
+          overlays: <Widget>[PositionIndicator(controller: _scroll)],
           child: ListView.builder(
-            controller: scroll,
+            controller: _scroll,
             padding: const EdgeInsets.only(top: 45, bottom: 25),
             itemCount: rows.length,
             itemBuilder: (context, index) => rows[index],

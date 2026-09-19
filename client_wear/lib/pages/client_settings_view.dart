@@ -5,7 +5,7 @@ import '../state/relay_session.dart';
 import '../wear_m3/wear_m3.dart';
 
 /// Shown on the settings row and on the About page.
-const String kAppVersion = 'V1.1.1';
+const String kAppVersion = 'V1.1.2';
 
 /// Page 3: the client's own settings — where the relay is, what secret unlocks
 /// it, and how this watch identifies itself.
@@ -104,7 +104,7 @@ class _ClientSettingsViewState extends State<ClientSettingsView> {
               controller: widget.scrollController,
               topSpacer: 60,
               padding: const EdgeInsets.only(bottom: 25),
-              itemCount: 8,
+              itemCount: 9,
               itemSpacing: WearTokens.itemSpacing,
               itemBuilder: (context, index, centerDistance) {
                 switch (index) {
@@ -166,6 +166,36 @@ class _ClientSettingsViewState extends State<ClientSettingsView> {
                     );
                   case 6:
                     /*
+                     * The crown's tick. A switch, not a tap-the-card row: the
+                     * state is a switch, and a control that looks like one is
+                     * read faster than a line of text saying so. The card is
+                     * still tappable around it, because on a watch the whole row
+                     * is a reasonable target.
+                     */
+                    final vibrate = settings.crownVibrate;
+                    return WearCard(
+                      leading: Icon(
+                        vibrate
+                            ? Icons.vibration_rounded
+                            : Icons.do_not_disturb_on_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      title: '表冠震动',
+                      trailing: Switch(
+                        value: vibrate,
+                        onChanged: (value) {
+                          settings.crownVibrate = value;
+                          setState(() {});
+                        },
+                      ),
+                      onTap: () {
+                        settings.crownVibrate = !vibrate;
+                        setState(() {});
+                      },
+                      semanticLabel: '表冠震动，${vibrate ? '已开启' : '已关闭'}',
+                    );
+                  case 7:
+                    /*
                      * Forces a re-read of everything mirrored from the sender.
                      * For a page that looks stale: the alternative is waiting
                      * for the next poll, with no way to tell whether the data
@@ -185,7 +215,7 @@ class _ClientSettingsViewState extends State<ClientSettingsView> {
                           : null,
                       semanticLabel: '重新拉取信息',
                     );
-                  case 7:
+                  case 8:
                     return WearCard(
                       leading: Icon(
                         Icons.info_outline_rounded,
